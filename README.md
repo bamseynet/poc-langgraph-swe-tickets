@@ -7,8 +7,8 @@ An agent triages each ticket, reads the codebase and drafts a fix plan and patch
 graph stops. Nothing is written back to the ticket until a person approves, edits or
 rejects, and a pending approval survives process restarts.
 
-> Work in progress. This first milestone is the agent core. The API, UI, infrastructure and
-> full documentation follow in later pull requests.
+> Work in progress. The agent core, API and UI are here. Infrastructure and full documentation
+> follow in a later pull request.
 
 ## The graph
 
@@ -29,13 +29,15 @@ flowchart LR
 
 ## Try it
 
-Requires Python 3.12 and [uv](https://docs.astral.sh/uv/). Everything runs offline against a
-fake LLM.
+Requires Python 3.12, [uv](https://docs.astral.sh/uv/) and Node 20.19 or later. Everything runs
+offline against a fake LLM.
 
 ```sh
-make install
-make check
+make dev
 ```
+
+Open http://localhost:5173, enter your name and choose **Fetch tickets**. Approved write-backs
+go to `data/write_backs.jsonl`, not to GitHub. `make check` runs the linters and tests.
 
 `src/ticketgate/graph.py` is the place to start reading.
 
