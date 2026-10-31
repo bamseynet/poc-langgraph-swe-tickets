@@ -405,3 +405,22 @@ def test_once_the_cap_is_reached_later_sources_are_not_listed(harness: Harness) 
         max_new_tickets=1,
     )
     assert service.discover().errors == []
+
+
+def test_discover_reports_a_failing_source(harness: Harness) -> None:
+    class BrokenSource:
+        def list_tickets(self) -> list[Ticket]:
+            raise httpx.ConnectError("source down")
+
+    service = harness.service(extra_sources=(BrokenSource(),))
+    result = service.discover()
+    assert result.new == []
+    assert "BrokenSource" in result.errors[0]
+    assert "source down" in result.errors[0]
+
+
+def test_unfinished_lists_only_tickets_a_restart_should_continue(harness: Harness) -> None:
+    service = _ingested_bug(harness)
+    assert service.unfinished() == []
+    harness.deps.store.register_ticket("queued", make_ticket("9").model_dump(mode="json"))
+    assert service.unfinished() == ["queued"]

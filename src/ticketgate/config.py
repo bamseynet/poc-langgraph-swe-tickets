@@ -41,3 +41,11 @@ class Settings(BaseSettings):
     target_repo_path: Path = REPO_ROOT / "examples" / "demo-target"
     max_investigation_steps: int = 12
     data_dir: Path = REPO_ROOT / "data"
+
+    # JSON object of reviewer name to token. Unset means local development: there is no
+    # login and reviewers type their own name, so "who" in the audit log is self-reported.
+    reviewer_tokens: SecretStr | None = None
+    # How often to poll sources. 0 means only when someone asks.
+    poll_interval_seconds: float = 0
+    worker_threads: int = 2
+    web_dist_path: Path = REPO_ROOT / "web" / "dist"

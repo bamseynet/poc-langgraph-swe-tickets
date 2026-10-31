@@ -66,7 +66,7 @@ def _is_transient(exc: Exception) -> bool:
         # such as access denied or a bad request, will not.
         status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
         return status == 429 or status >= 500
-    return not isinstance(exc, TypeError | KeyError | LookupError)
+    return not isinstance(exc, TypeError | LookupError)
 
 
 DEFAULT_RETRY = RetryPolicy(max_attempts=3, retry_on=_is_transient)

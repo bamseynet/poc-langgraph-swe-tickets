@@ -23,7 +23,8 @@ from ticketgate.store import Store
 
 logger = logging.getLogger(__name__)
 
-ProgressKind = Literal["node", "awaiting_approval", "finished", "failed"]
+# "resync" tells a client it missed events and should reload, rather than trust what it has.
+ProgressKind = Literal["node", "awaiting_approval", "finished", "failed", "resync"]
 
 
 class TicketStatus(StrEnum):
@@ -171,6 +172,10 @@ class TicketService:
                 if len(new) >= self._max_new_tickets:
                     break
                 thread_id = ticket.ref.thread_id
+                # Registered tickets already have their ingestion record, so skip two writes
+                # per known ticket on every poll.
+                if self._store.has_ticket(thread_id):
+                    continue
                 # Audit first. The event key makes it idempotent, so a crash between the two
                 # steps cannot leave a registered ticket without its ingestion record.
                 self._store.record_event(
@@ -195,11 +200,15 @@ class TicketService:
         Tickets waiting for a human are left alone: only `decide` can move them on. A decision
         already saved stands, so this can post an approval whose first attempt failed.
         """
-        unfinished = {TicketStatus.QUEUED, TicketStatus.RUNNING, TicketStatus.FAILED}
-        recovered = [t.thread_id for t in self.list_tickets() if t.status in unfinished]
+        recovered = self.unfinished()
         for thread_id in recovered:
             self.process(thread_id)
         return recovered
+
+    def unfinished(self) -> list[str]:
+        """Tickets a restart should continue. Waiting for a human doesn't count."""
+        statuses = {TicketStatus.QUEUED, TicketStatus.RUNNING, TicketStatus.FAILED}
+        return [t.thread_id for t in self.list_tickets() if t.status in statuses]
 
     def list_tickets(self, status: TicketStatus | None = None) -> list[TicketView]:
         views = [self.get(thread_id) for thread_id in self._store.list_thread_ids()]
