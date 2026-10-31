@@ -77,7 +77,16 @@ beforeEach(() => {
     retryFails: false,
   };
   vi.stubGlobal("fetch", vi.fn(fakeFetch));
+  stubScreenWidth(false);
 });
+
+// jsdom has no layout, so it implements neither of these.
+const scrollIntoView = vi.fn();
+function stubScreenWidth(narrow: boolean) {
+  vi.stubGlobal("matchMedia", () => ({ matches: narrow }));
+  Element.prototype.scrollIntoView = scrollIntoView;
+  scrollIntoView.mockClear();
+}
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -148,4 +157,17 @@ test("a retry error stays visible after the refresh that follows it", async () =
   await user.click(await screen.findByRole("button", { name: /totals are wrong/i }));
   await user.click(screen.getByRole("button", { name: /retry/i }));
   await waitFor(() => expect(screen.getByText("Cannot retry now")).toBeInTheDocument());
+});
+
+test("selecting a ticket on a narrow screen brings its detail into view", async () => {
+  stubScreenWidth(true);
+  await renderApp();
+  await userEvent.click(await screen.findByRole("button", { name: /totals are wrong/i }));
+  expect(scrollIntoView).toHaveBeenCalled();
+});
+
+test("selecting a ticket on a wide screen does not move the page", async () => {
+  await renderApp();
+  await userEvent.click(await screen.findByRole("button", { name: /totals are wrong/i }));
+  expect(scrollIntoView).not.toHaveBeenCalled();
 });
