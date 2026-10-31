@@ -196,6 +196,22 @@ A deployment stops the old task before starting the new one, so there is a short
 - **The proposed patch is only a suggestion.** It is checked with `git apply --check` and never applied. Passing that check says nothing about whether the patch is correct.
 - **The check runs against the checkout as it was.** The deployed container clones once at startup, so it drifts until the next restart.
 
+### Known limitations / hardening
+
+Left after the review cap. None gives a wrong result on normal input.
+
+- **Scale of the ticket list.** `GET /api/tickets` and startup recovery read one checkpoint per ticket ever ingested, and every non-node progress event makes each open browser refetch. Fine for a PoC; keep a status column or paginate before real use.
+- **Polling cost.** Each poll lists every open issue (no `since` cursor), and approved issues stay open, so large repositories use rate limit.
+- **Failed tickets re-run on restart.** Recovery resumes failed tickets so a saved approval is never lost. A permanently failing ticket (for example a 403) therefore repeats its LLM calls after each restart.
+- **Error text.** The message of a failed run is shown to reviewers and stored in the audit log; it can include URLs or paths from the HTTP, AWS or SQLite libraries.
+- **Retries.** GitHub rate-limit responses that use 403 are treated as permanent. Client-side retries and botocore's own retries multiply.
+- **Audit view** shows the newest 200 events with no paging.
+- **Event stream.** A 401/403 on the stream stops live updates without a message; reload to sign in again.
+- **Target checkout.** The container clones the target repository once at start (shallow, unauthenticated), so it can drift from the real repository, and private repositories are not supported. `search_code` rereads files on every call (capped at 1 MB each).
+- **In-memory bookkeeping.** Per-ticket locks and run errors are kept for the life of the process.
+- **Jira** tickets can be triaged and investigated but only rejected: there is no Jira writer.
+- **Auth** is static bearer tokens (see above), not SSO.
+
 ## Next steps
 
 - Replace SQLite with `langgraph-checkpoint-postgres` to allow more than one API process.
