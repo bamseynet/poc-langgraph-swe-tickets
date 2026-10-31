@@ -307,3 +307,18 @@ def test_read_file_says_when_a_big_file_was_cut_off(repo: Path) -> None:
 def test_reading_an_empty_file_says_so(repo: Path) -> None:
     (repo / "empty.py").write_text("")
     assert _call(repo, "read_file", path="empty.py") == "empty.py is empty"
+
+
+@pytest.mark.parametrize("name", [".env", "secrets/prod.yaml", ".aws/credentials", "../x.py"])
+def test_a_patch_against_a_hidden_path_is_never_checked(repo: Path, name: str) -> None:
+    (repo / ".env").write_text("TOKEN=abc\n")
+    diff = f"--- a/{name}\n+++ b/{name}\n@@ -1 +1 @@\n-TOKEN=abc\n+TOKEN=x\n"
+    assert check_patch(repo, diff) is False
+
+
+def test_a_patch_against_an_ordinary_file_is_still_checked(repo: Path) -> None:
+    diff = (
+        "--- a/src/app.py\n+++ b/src/app.py\n@@ -1,2 +1,2 @@\n"
+        " def add(a, b):\n-    return a - b\n+    return a + b\n"
+    )
+    assert check_patch(repo, diff) is True

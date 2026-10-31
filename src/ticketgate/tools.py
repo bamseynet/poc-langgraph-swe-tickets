@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -265,12 +266,41 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
     return [list_files, read_file, search_code]
 
 
+_DIFF_PATH_LINE = re.compile(
+    r"^(?:--- |\+\+\+ |rename (?:from|to) |copy (?:from|to) |diff --git )(.+)$", re.MULTILINE
+)
+
+
+def _diff_touches_hidden_path(diff: str) -> bool:
+    """True if the diff names a path the agent may not read, or one outside the checkout.
+
+    Whether a patch applies depends on the file's contents, so checking one against a hidden
+    file would tell the model, and through it a ticket author, whether a guess was right.
+    """
+    for match in _DIFF_PATH_LINE.finditer(diff):
+        for raw in match.group(1).replace('"', "").split(" b/"):
+            path = raw.split("\t")[0].strip()
+            if path == "/dev/null":
+                continue
+            for candidate in (path, path.removeprefix("a/").removeprefix("b/")):
+                normal = Path(os.path.normpath(candidate))
+                if normal.is_absolute() or ".." in normal.parts:
+                    return True
+                if _is_hidden_from_agent(normal):
+                    return True
+    return False
+
+
 def check_patch(root: Path, diff: str) -> bool | None:
     """Report whether `diff` applies cleanly, without changing any file.
+
+    A diff that touches a path hidden from the agent is reported as not applying.
 
     Returns None when git is unavailable, so "could not check" stays distinct from "does
     not apply".
     """
+    if _diff_touches_hidden_path(diff):
+        return False
     root = root.resolve()
     # Stop git discovering a parent repository. From a subdirectory of one, `git apply` reads
     # `diff --git` paths as relative to the top level, skips them as out of scope, and exits 0.
