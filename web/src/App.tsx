@@ -61,6 +61,7 @@ export function App() {
       setAudit(nextAudit);
       setLoadError(null);
     } catch (cause) {
+      if (thisRefresh !== latestRefresh.current) return;
       setLoadError(cause instanceof Error ? cause.message : "Could not reach the API.");
     }
   }, []);
@@ -113,7 +114,7 @@ export function App() {
     const line = describeProgress(event);
     if (line) setActivity((current) => [line, ...current].slice(0, MAX_ACTIVITY));
     if (event.kind !== "node") void refresh();
-  }, () => void refresh());
+  }, () => void refresh(), token);
 
   async function fetchTickets() {
     setFetching(true);

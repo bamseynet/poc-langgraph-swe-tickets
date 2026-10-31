@@ -116,7 +116,11 @@ def _parse_tokens(settings: Settings) -> dict[str, str] | None:
         tokens = json.loads(settings.reviewer_tokens.get_secret_value())
     except json.JSONDecodeError as exc:
         raise ValueError("REVIEWER_TOKENS must be a JSON object of name to token") from exc
-    valid = isinstance(tokens, dict) and tokens and all(isinstance(t, str) for t in tokens.values())
+    valid = (
+        isinstance(tokens, dict)
+        and tokens
+        and all(isinstance(t, str) and t for t in tokens.values())
+    )
     if not valid:
         raise ValueError("REVIEWER_TOKENS must be a non-empty JSON object of name to token")
     return dict(tokens)

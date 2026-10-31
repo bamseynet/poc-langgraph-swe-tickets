@@ -11,6 +11,8 @@ export function useEvents(
   enabled: boolean,
   onEvent: (event: ProgressEvent) => void,
   onConnect: () => void,
+  // Changes when the credentials do, so a stream refused for a bad token restarts on a new one.
+  identity = "",
 ) {
   const latest = useRef({ onEvent, onConnect });
   useEffect(() => {
@@ -56,5 +58,5 @@ export function useEvents(
 
     void follow();
     return () => controller.abort();
-  }, [api, enabled]);
+  }, [api, enabled, identity]);
 }

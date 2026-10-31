@@ -251,8 +251,9 @@ def test_identity_comes_from_the_token_not_the_request_body(secured: TestClient)
     assert next(e for e in events if e["action"] == "decision.approve")["actor"] == "alice"
 
 
-def test_malformed_token_config_fails_at_startup(tmp_path: Path) -> None:
-    settings = _settings(tmp_path, reviewer_tokens=SecretStr("not json"))
+@pytest.mark.parametrize("config", ["not json", '{"alice": ""}', "{}"])
+def test_malformed_token_config_fails_at_startup(tmp_path: Path, config: str) -> None:
+    settings = _settings(tmp_path, reviewer_tokens=SecretStr(config))
     with pytest.raises(ValueError, match="REVIEWER_TOKENS"), TestClient(create_app(settings)):
         pass
 
