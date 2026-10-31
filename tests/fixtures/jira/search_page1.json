@@ -1,0 +1,45 @@
+{
+  "issues": [
+    {
+      "id": "10001",
+      "key": "SHOP-7",
+      "self": "https://example.atlassian.net/rest/api/3/issue/10001",
+      "fields": {
+        "summary": "Checkout crashes on 100% discount",
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Problem"}]},
+            {
+              "type": "paragraph",
+              "content": [
+                {"type": "text", "text": "Total is "},
+                {"type": "text", "text": "wrong", "marks": [{"type": "strong"}]},
+                {"type": "hardBreak"},
+                {"type": "text", "text": "after the coupon."}
+              ]
+            },
+            {
+              "type": "bulletList",
+              "content": [
+                {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Apply FREE100"}]}]},
+                {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Press pay"}]}]}
+              ]
+            },
+            {"type": "codeBlock", "attrs": {"language": "python"}, "content": [{"type": "text", "text": "total / 0"}]}
+          ]
+        },
+        "issuetype": {"name": "Bug"},
+        "priority": {"name": "High"},
+        "labels": ["checkout"],
+        "reporter": {"accountId": "abc", "displayName": "Ada Reporter"},
+        "project": {"key": "SHOP"},
+        "created": "2026-03-01T10:15:30.000+0000",
+        "updated": "2026-03-02T10:15:30.000+0000"
+      }
+    }
+  ],
+  "nextPageToken": "page-2",
+  "isLast": false
+}
