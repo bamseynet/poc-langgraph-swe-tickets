@@ -156,7 +156,7 @@ It creates a Fargate service behind a load balancer, with SQLite on encrypted EF
    - Outside the US, also pass `-c modelId=` and `-c workerModelId=` with the `eu.`, `au.` or `global.` profile from the model card.
 
 4. **Point your domain at the load balancer.** Create a CNAME from `domainName` to the stack's `AlbDnsName` output. The stack doesn't manage DNS.
-5. **Set the secrets.** The stack generates a random GitHub placeholder, so polling fails until you replace it, and a reviewer secret holding one random `admin` token. Its outputs name the two secrets:
+5. **Set the secrets.** The GitHub secret starts as the placeholder `REPLACE_ME_AFTER_DEPLOY`, which the app refuses to start with until you replace it, and a reviewer secret holding one random `admin` token. Its outputs name the two secrets:
 
    ```sh
    aws secretsmanager put-secret-value --secret-id <GithubTokenSecret> --secret-string "$TOKEN"

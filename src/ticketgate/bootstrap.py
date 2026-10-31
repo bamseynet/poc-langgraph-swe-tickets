@@ -36,8 +36,15 @@ class App:
     settings: Settings
 
 
+# What the CDK stack puts in the secret until someone sets the real token.
+PLACEHOLDER_TOKEN = "REPLACE_ME_AFTER_DEPLOY"  # noqa: S105
+
+
 def _github_token(settings: Settings) -> str | None:
-    return settings.github_token.get_secret_value() if settings.github_token else None
+    token = settings.github_token.get_secret_value() if settings.github_token else None
+    if token == PLACEHOLDER_TOKEN:
+        raise ConfigError("GITHUB_TOKEN is still the placeholder; set the secret. See the README.")
+    return token
 
 
 def _build_jira_source(settings: Settings) -> JiraSource:

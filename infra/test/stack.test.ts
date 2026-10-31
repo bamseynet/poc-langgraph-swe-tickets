@@ -107,9 +107,9 @@ describe("secrets", () => {
   test("no secret value is written into the template", () => {
     const secrets = Object.values(template.findResources("AWS::SecretsManager::Secret"));
     expect(secrets.length).toBe(2);
-    for (const secret of secrets) {
-      expect(secret.Properties.SecretString).toBeUndefined();
-    }
+    // Only the GitHub token's obvious placeholder may appear, and the app refuses it.
+    const literal = secrets.map((s) => s.Properties.SecretString).filter(Boolean);
+    expect(literal).toEqual(["REPLACE_ME_AFTER_DEPLOY"]);
   });
 });
 

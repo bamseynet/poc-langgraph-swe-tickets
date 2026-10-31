@@ -254,3 +254,14 @@ def test_gives_up_after_the_wait(tmp_path: Path) -> None:
         open_app(settings),
     ):
         pass
+
+
+def test_the_placeholder_github_token_is_refused_with_a_clear_error(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        ticket_source="github",
+        github_repo="o/r",
+        github_token=SecretStr("REPLACE_ME_AFTER_DEPLOY"),
+    )
+    with pytest.raises(ConfigError, match="placeholder"):
+        build_sources(settings)

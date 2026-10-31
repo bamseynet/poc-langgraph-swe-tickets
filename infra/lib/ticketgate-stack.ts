@@ -18,6 +18,7 @@ import {
 } from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+import { SecretValue } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { fileURLToPath } from "node:url";
 import { bedrockStatements } from "./bedrock-policy.js";
@@ -75,6 +76,9 @@ export class TicketgateStack extends Stack {
     const githubToken = new Secret(this, "GithubToken", {
       description: "GitHub token that can comment on and label issues in the target repository",
       removalPolicy: RemovalPolicy.RETAIN,
+      // A placeholder, not a secret. Without it Secrets Manager invents a random value that
+      // looks like a token, and every GitHub call fails with 401. The app refuses this value.
+      secretStringValue: SecretValue.unsafePlainText("REPLACE_ME_AFTER_DEPLOY"),
     });
     const reviewerTokens = new Secret(this, "ReviewerTokens", {
       description: "JSON object of reviewer name to API token",
