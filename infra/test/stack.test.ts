@@ -248,6 +248,15 @@ describe("propsFromContext", () => {
     });
   });
 
+  test("reads the poll interval and refuses nonsense", () => {
+    expect(propsFromContext(from({ ...required, pollIntervalSeconds: "60" })).pollIntervalSeconds).toBe(
+      60,
+    );
+    expect(() => propsFromContext(from({ ...required, pollIntervalSeconds: "soon" }))).toThrow(
+      /pollIntervalSeconds/,
+    );
+  });
+
   test("passes optional values through", () => {
     const props = propsFromContext(
       from({ ...required, modelId: "eu.anthropic.claude-sonnet-5-5", allowedCidr: "10.0.0.0/8" }),

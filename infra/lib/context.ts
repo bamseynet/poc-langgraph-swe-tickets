@@ -18,5 +18,13 @@ export function propsFromContext(context: (name: string) => string | undefined):
     allowedCidr: context("allowedCidr"),
     certificateArn: context("certificateArn"),
     domainName: context("domainName"),
+    pollIntervalSeconds: numberFrom(context("pollIntervalSeconds"), "pollIntervalSeconds"),
   };
+}
+
+function numberFrom(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} must be a positive number`);
+  return parsed;
 }
