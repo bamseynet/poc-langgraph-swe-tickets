@@ -84,6 +84,20 @@ class GraphDeps:
     retry: RetryPolicy = field(default_factory=lambda: DEFAULT_RETRY)
 
 
+def _checkpoint_schema() -> list[str]:
+    """The checkpointer's own table definitions, taken from a throwaway in-memory database."""
+    scratch = sqlite3.connect(":memory:")
+    try:
+        SqliteSaver(scratch).setup()
+        rows = scratch.execute("SELECT type, sql FROM sqlite_master WHERE sql IS NOT NULL")
+        return [
+            sql.replace(f"CREATE {kind.upper()}", f"CREATE {kind.upper()} IF NOT EXISTS", 1)
+            for kind, sql in rows
+        ]
+    finally:
+        scratch.close()
+
+
 @contextmanager
 def open_checkpointer(path: Path | str, *, journal_mode: str = "WAL") -> Iterator[SqliteSaver]:
     conn = sqlite3.connect(path, check_same_thread=False)
@@ -93,10 +107,16 @@ def open_checkpointer(path: Path | str, *, journal_mode: str = "WAL") -> Iterato
         # Allowing nothing more means a tampered database cannot construct arbitrary objects.
         serde = JsonPlusSerializer(allowed_msgpack_modules=None)
         saver = SqliteSaver(conn, serde=serde)
-        saver.setup()
-        # After setup, which always switches the database to WAL. Leaving WAL needs exclusive
-        # access, so this must happen before any other connection opens the file.
-        conn.execute(f"PRAGMA journal_mode={journal_mode}")
+        if journal_mode.upper() == "WAL":
+            saver.setup()
+        else:
+            # setup() always switches the file to WAL, which needs shared memory that a network
+            # file system cannot give, so even briefly doing it can fail or corrupt the file.
+            # Set the mode first, then create the same tables without that switch.
+            conn.execute(f"PRAGMA journal_mode={journal_mode}")
+            for statement in _checkpoint_schema():
+                conn.execute(statement)
+            saver.is_setup = True
         yield saver
     finally:
         conn.close()

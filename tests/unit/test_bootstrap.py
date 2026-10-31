@@ -265,3 +265,29 @@ def test_the_placeholder_github_token_is_refused_with_a_clear_error(tmp_path: Pa
     )
     with pytest.raises(ConfigError, match="placeholder"):
         build_sources(settings)
+
+
+def test_a_non_wal_database_is_never_switched_to_wal_while_being_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from ticketgate.graph import open_checkpointer
+
+    real_setup = SqliteSaver.setup
+
+    def forbidden(self: SqliteSaver) -> None:
+        if self.is_setup:
+            return
+        in_memory = self.conn.execute("PRAGMA database_list").fetchone()[2] == ""
+        if not in_memory:
+            raise AssertionError("setup() switches the database to WAL")
+        real_setup(self)
+
+    path = tmp_path / "fresh.db"
+    with monkeypatch.context() as patch:
+        patch.setattr(SqliteSaver, "setup", forbidden)
+        with open_checkpointer(path, journal_mode="DELETE") as saver:
+            assert saver.get_tuple({"configurable": {"thread_id": "x"}}) is None
+    assert _journal_mode(path) == "delete"
+    assert not list(tmp_path.glob("*-wal"))
