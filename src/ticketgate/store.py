@@ -120,6 +120,13 @@ class Store:
             )
             return cursor.rowcount == 1
 
+    def has_ticket(self, thread_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM tickets WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+        return row is not None
+
     def get_ticket(self, thread_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute(

@@ -23,7 +23,8 @@ from ticketgate.store import Store
 
 logger = logging.getLogger(__name__)
 
-ProgressKind = Literal["node", "awaiting_approval", "finished", "failed"]
+# "resync" tells a client it missed events and should reload, rather than trust what it has.
+ProgressKind = Literal["node", "awaiting_approval", "finished", "failed", "resync"]
 
 
 class TicketStatus(StrEnum):
@@ -171,6 +172,10 @@ class TicketService:
                 if len(new) >= self._max_new_tickets:
                     break
                 thread_id = ticket.ref.thread_id
+                # Registered tickets already have their ingestion record, so skip two writes
+                # per known ticket on every poll.
+                if self._store.has_ticket(thread_id):
+                    continue
                 # Audit first. The event key makes it idempotent, so a crash between the two
                 # steps cannot leave a registered ticket without its ingestion record.
                 self._store.record_event(

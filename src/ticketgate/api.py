@@ -65,9 +65,14 @@ class EventBus:
 
     @staticmethod
     def _deliver(queue: asyncio.Queue[ProgressEvent], event: ProgressEvent) -> None:
-        # A slow client loses progress lines, never a ticket: the UI refetches on reconnect.
-        with contextlib.suppress(asyncio.QueueFull):
+        # A slow client loses its backlog, but is told so: it must reload rather than trust a
+        # list that may be missing a "finished" or "awaiting_approval" event.
+        try:
             queue.put_nowait(event)
+        except asyncio.QueueFull:
+            while not queue.empty():
+                queue.get_nowait()
+            queue.put_nowait(ProgressEvent(thread_id="", kind="resync"))
 
 
 async def event_stream(bus: EventBus) -> AsyncGenerator[dict[str, str]]:
@@ -171,6 +176,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             finally:
                 if poller:
                     poller.cancel()
+                    # Wait, so a poll in flight cannot submit to the executor once it is shut down.
+                    await asyncio.gather(poller, return_exceptions=True)
                 await run_in_threadpool(executor.shutdown, wait=True, cancel_futures=True)
 
     async def _poll(context: App, executor: ThreadPoolExecutor) -> None:
@@ -279,4 +286,10 @@ def _submit(executor: ThreadPoolExecutor, task: Callable[..., Any], *args: Any) 
         if not future.cancelled() and (exc := future.exception()):
             logger.error("Background task failed", exc_info=exc)
 
-    executor.submit(task, *args).add_done_callback(log_failure)
+    try:
+        future = executor.submit(task, *args)
+    except RuntimeError:
+        # Shutting down. The ticket is registered, so the next start recovers it.
+        logger.warning("Not starting %s: the executor is shut down", args)
+        return
+    future.add_done_callback(log_failure)

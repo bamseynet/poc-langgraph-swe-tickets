@@ -279,16 +279,21 @@ def test_bus_delivers_events_published_from_another_thread() -> None:
     assert asyncio.run(scenario()).node == "triage"
 
 
-def test_bus_drops_events_for_a_stuck_subscriber_without_blocking() -> None:
-    async def scenario() -> int:
+def test_bus_tells_a_stuck_subscriber_to_resync_instead_of_dropping_silently() -> None:
+    async def scenario() -> list[str]:
         bus = EventBus(max_queued=2)
         queue = bus.subscribe()
         for _ in range(5):
             bus.publish(ProgressEvent("t", "node", "x"))
         await asyncio.sleep(0)
-        return queue.qsize()
+        kinds: list[str] = []
+        while not queue.empty():
+            kinds.append(queue.get_nowait().kind)
+        return kinds
 
-    assert asyncio.run(scenario()) == 2
+    kinds = asyncio.run(scenario())
+    assert len(kinds) <= 2
+    assert kinds[-1] == "resync"
 
 
 def test_event_stream_serialises_events_as_sse_data() -> None:

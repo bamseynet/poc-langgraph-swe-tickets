@@ -89,7 +89,7 @@ export interface Session {
 
 export interface ProgressEvent {
   thread_id: string;
-  kind: "node" | "awaiting_approval" | "finished" | "failed";
+  kind: "node" | "awaiting_approval" | "finished" | "failed" | "resync";
   node: string | null;
   detail: Record<string, unknown>;
 }
