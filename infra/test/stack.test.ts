@@ -2,6 +2,7 @@ import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { describe, expect, test } from "vitest";
 import { foundationModelId } from "../lib/bedrock-policy.js";
+import { propsFromContext } from "../lib/context.js";
 import { TicketgateStack, type TicketgateProps } from "../lib/ticketgate-stack.js";
 
 const SONNET = "us.anthropic.claude-sonnet-5-5";
@@ -173,6 +174,89 @@ describe("runtime", () => {
   });
 });
 
+describe("resilience", () => {
+  const template = synth();
+
+  test("a task waiting for the data lock is not replaced for being unhealthy", () => {
+    template.hasResourceProperties("AWS::ECS::Service", { HealthCheckGracePeriodSeconds: 300 });
+    template.hasResourceProperties("AWS::ElasticLoadBalancingV2::TargetGroup", {
+      HealthCheckIntervalSeconds: 15,
+      HealthyThresholdCount: 2,
+    });
+  });
+
+  test("gets the longest allowed time to finish work when stopped", () => {
+    const task = Object.values(template.findResources("AWS::ECS::TaskDefinition"))[0];
+    expect(task?.Properties.ContainerDefinitions[0].StopTimeout).toBe(120);
+  });
+
+  test("the service waits for its file system to be reachable", () => {
+    const service = Object.values(template.findResources("AWS::ECS::Service"))[0];
+    const dependencies: string[] = service?.DependsOn ?? [];
+    expect(dependencies.some((name) => name.includes("MountTarget") || name.startsWith("Data"))).toBe(
+      true,
+    );
+  });
+});
+
+describe("outputs", () => {
+  test("name what the deploy steps need", () => {
+    const outputs = Object.keys(synth().findOutputs("*"));
+    expect(outputs).toEqual(
+      expect.arrayContaining([
+        "Url",
+        "AlbDnsName",
+        "ClusterName",
+        "ServiceName",
+        "GithubTokenSecret",
+        "ReviewerTokensSecret",
+      ]),
+    );
+  });
+
+  test("the URL uses the domain a certificate covers, not the load balancer's name", () => {
+    const template = synth({
+      certificateArn: "arn:aws:acm:us-east-1:111122223333:certificate/abc",
+      domainName: "tickets.example.com",
+    });
+    template.hasOutput("Url", { Value: "https://tickets.example.com" });
+  });
+
+  test("HTTPS without a domain is refused, because the certificate could never match", () => {
+    expect(() =>
+      synth({ certificateArn: "arn:aws:acm:us-east-1:111122223333:certificate/abc" }),
+    ).toThrow(/domainName/);
+  });
+});
+
+describe("propsFromContext", () => {
+  const required = {
+    githubRepo: "octo-org/octo-repo",
+    targetRepoUrl: "https://github.com/octo-org/octo-repo.git",
+  };
+  const from = (values: Record<string, string>) => (name: string) => values[name];
+
+  test("refuses to guess the repositories", () => {
+    expect(() => propsFromContext(from({}))).toThrow(/githubRepo.*targetRepoUrl/);
+    expect(() => propsFromContext(from({ githubRepo: "a/b" }))).toThrow(/targetRepoUrl/);
+  });
+
+  test("defaults to the documented inference profiles", () => {
+    expect(propsFromContext(from(required))).toMatchObject({
+      modelId: "us.anthropic.claude-sonnet-5-5",
+      workerModelId: "us.anthropic.claude-haiku-5-5",
+    });
+  });
+
+  test("passes optional values through", () => {
+    const props = propsFromContext(
+      from({ ...required, modelId: "eu.anthropic.claude-sonnet-5-5", allowedCidr: "10.0.0.0/8" }),
+    );
+    expect(props.modelId).toBe("eu.anthropic.claude-sonnet-5-5");
+    expect(props.allowedCidr).toBe("10.0.0.0/8");
+  });
+});
+
 describe("network exposure", () => {
   function albIngress(template: Template) {
     const groups = template.findResources("AWS::EC2::SecurityGroup");
@@ -195,10 +279,12 @@ describe("network exposure", () => {
   test("uses HTTPS when a certificate is supplied", () => {
     const template = synth({
       certificateArn: "arn:aws:acm:us-east-1:111122223333:certificate/abc",
+      domainName: "tickets.example.com",
     });
     template.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
       Protocol: "HTTPS",
       Port: 443,
+      SslPolicy: "ELBSecurityPolicy-TLS13-1-2-2021-06",
     });
   });
 

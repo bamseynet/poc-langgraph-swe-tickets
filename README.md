@@ -134,18 +134,29 @@ The stack is TypeScript because the CDK CLI needs Node anyway, this repository a
 It creates a Fargate service behind a load balancer, with SQLite on encrypted EFS and the two tokens in Secrets Manager. The task role can invoke only the two configured inference profiles.
 
 1. **Enable the models once per account.** Submit Anthropic's first-time-use form in the Bedrock console, then make one invocation with an identity that has the AWS Marketplace permissions listed in [Request access to models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html). The task role deliberately doesn't have them.
-2. **Deploy.** This builds the image locally, so Docker must be running:
+2. **Bootstrap CDK,** once per account and Region. This creates the bucket and image repository that deployments upload to:
+
+   ```sh
+   make bootstrap
+   ```
+
+3. **Deploy.** This builds the image locally, so Docker must be running. `githubRepo` and `targetRepoUrl` are required, and the target must be a public repository, because the container clones it without credentials:
 
    ```sh
    make deploy CONTEXT="-c githubRepo=owner/repo \
      -c targetRepoUrl=https://github.com/owner/repo.git \
      -c allowedCidr=203.0.113.0/24 \
      -c certificateArn=arn:aws:acm:... \
+     -c domainName=tickets.example.com \
      -c githubLabelFilter=agent-triage"
    ```
 
-   With no `allowedCidr`, nobody can reach the load balancer. With no `certificateArn`, the listener is plain HTTP and reviewer tokens cross the network unencrypted, so don't skip it outside a closed network.
-3. **Set the secrets.** The stack generates a random GitHub placeholder, so polling fails until you replace it, and a reviewer secret holding one random `admin` token. Its outputs name the two secrets:
+   - With no `allowedCidr`, nobody can reach the load balancer.
+   - With no `certificateArn`, the listener is plain HTTP and reviewer tokens cross the network unencrypted, so don't skip it outside a closed network. `certificateArn` also needs `domainName`, the name the certificate covers.
+   - Outside the US, also pass `-c modelId=` and `-c workerModelId=` with the `eu.`, `au.` or `global.` profile from the model card.
+
+4. **Point your domain at the load balancer.** Create a CNAME from `domainName` to the stack's `AlbDnsName` output. The stack doesn't manage DNS.
+5. **Set the secrets.** The stack generates a random GitHub placeholder, so polling fails until you replace it, and a reviewer secret holding one random `admin` token. Its outputs name the two secrets:
 
    ```sh
    aws secretsmanager put-secret-value --secret-id <GithubTokenSecret> --secret-string "$TOKEN"
@@ -153,10 +164,10 @@ It creates a Fargate service behind a load balancer, with SQLite on encrypted EF
      --secret-string '{"alice":"a-long-random-token"}'
    ```
 
-4. **Restart the service** so the task reads the new values:
+6. **Restart the service** so the task reads the new values, using the stack's `ClusterName` and `ServiceName` outputs:
 
    ```sh
-   aws ecs update-service --cluster <cluster> --service <service> --force-new-deployment
+   aws ecs update-service --cluster <ClusterName> --service <ServiceName> --force-new-deployment
    ```
 
 A deployment stops the old task before starting the new one, so there is a short outage. That is deliberate: one SQLite file must never have two writers. Deleting the stack keeps the EFS file system and the secrets, because they hold the audit log and credentials.
@@ -166,7 +177,7 @@ A deployment stops the old task before starting the new one, so there is a short
 **Not verified**
 
 - **Nothing has run against real Bedrock.** No credentials were available during development. Request shapes are checked offline with botocore's `Stubber`, which validates them against the service model, but the prompts have never met a real model and multi-turn thinking blocks are untested.
-- **The CDK stack has never been deployed.**
+- **The CDK stack has never been deployed.** CI synthesizes the template and builds the image, and the image has been run locally with the fake LLM. EFS file locking, the IAM policy against real Bedrock calls and the health-check timings are untested. `SqliteSaver.setup()` also switches to WAL on every start before the app switches to `DELETE`, so WAL is briefly in use on EFS, by one process.
 - **The Jira adapter has never contacted a Jira server.** Its fixtures are hand-written from Atlassian's documented response, and there is no Jira writer, so approving a Jira ticket fails clearly and writes nothing.
 
 **Security**
@@ -177,7 +188,7 @@ A deployment stops the old task before starting the new one, so there is a short
 
 **Scale and behaviour**
 
-- **One process, enforced by a file lock.** That follows from SQLite and an in-process per-ticket lock. A second API process refuses to start. Run a single uvicorn worker: forked workers would share the lock and defeat it.
+- **One process, enforced by a file lock.** That follows from SQLite and an in-process per-ticket lock. A second API process refuses to start. That includes `uvicorn --workers 2`, whose extra workers fail to start.
 - **Each poll reads every open issue.** The cap (`MAX_TICKETS_PER_POLL`) limits new work, not the listing, so 1000 open issues cost about 20 GitHub requests per poll.
 - **A saved decision stands.** If an approval is saved but posting fails, retrying or restarting posts it without asking again. A rejection can't overrule it, because the ticket is no longer waiting.
 - **Listing tickets reads every thread's state.** That is fine for a demo and slow for thousands.

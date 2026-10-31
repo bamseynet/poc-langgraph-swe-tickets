@@ -1,4 +1,4 @@
-.PHONY: install dev dev-api dev-web lint typecheck test synth check deploy
+.PHONY: install dev dev-api dev-web lint typecheck test synth check bootstrap deploy
 
 install:
 	uv sync
@@ -36,7 +36,14 @@ synth:
 
 check: lint typecheck test synth
 
+# Prepares an AWS account and Region for CDK. Needed once. See "Deploy" in the README.
+bootstrap:
+	npm --prefix infra ci --no-audit --no-fund
+	cd infra && npx cdk bootstrap
+
 # Creates real AWS resources that cost money. See "Deploy" in the README first.
-# Example: make deploy CONTEXT="-c githubRepo=owner/repo -c allowedCidr=203.0.113.0/24"
+# Example: make deploy CONTEXT="-c githubRepo=owner/repo \
+#   -c targetRepoUrl=https://github.com/owner/repo.git -c allowedCidr=203.0.113.0/24"
 deploy:
+	npm --prefix infra ci --no-audit --no-fund
 	cd infra && npx cdk deploy $(CONTEXT)

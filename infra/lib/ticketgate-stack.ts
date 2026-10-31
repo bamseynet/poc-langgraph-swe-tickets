@@ -14,6 +14,7 @@ import { FileSystem } from "aws-cdk-lib/aws-efs";
 import {
   ApplicationLoadBalancer,
   ApplicationProtocol,
+  SslPolicy,
 } from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
@@ -42,12 +43,19 @@ export interface TicketgateProps extends StackProps {
   allowedCidr?: string;
   /** An ACM certificate for HTTPS. Without one, reviewer tokens cross the network in clear. */
   certificateArn?: string;
+  /** The name the certificate covers. You point it at the load balancer yourself. */
+  domainName?: string;
   pollIntervalSeconds?: number;
 }
 
 export class TicketgateStack extends Stack {
   constructor(scope: Construct, id: string, props: TicketgateProps) {
     super(scope, id, props);
+
+    // A certificate can never cover the load balancer's own AWS hostname.
+    if (props.certificateArn && !props.domainName) {
+      throw new Error("certificateArn also needs domainName, the name the certificate covers.");
+    }
 
     const vpc = new Vpc(this, "Vpc", { maxAzs: 2, natGateways: 1 });
 
@@ -105,6 +113,8 @@ export class TicketgateStack extends Stack {
     const container = task.addContainer("App", {
       image: ContainerImage.fromAsset(REPO_ROOT, { platform: Platform.LINUX_AMD64 }),
       portMappings: [{ containerPort: CONTAINER_PORT }],
+      // The most Fargate allows, so a stopping task can finish and release its data lock.
+      stopTimeout: Duration.seconds(120),
       logging: LogDrivers.awsLogs({
         streamPrefix: "ticketgate",
         logGroup: new LogGroup(this, "Logs", { retention: RetentionDays.ONE_MONTH }),
@@ -146,10 +156,15 @@ export class TicketgateStack extends Stack {
       minHealthyPercent: 0,
       maxHealthyPercent: 100,
       circuitBreaker: { rollback: true },
-      // The container clones the target repository before it starts answering.
-      healthCheckGracePeriod: Duration.minutes(3),
+      // Covers cloning the target repository, and waiting up to two minutes for the data lock.
+      healthCheckGracePeriod: Duration.minutes(5),
     });
     fileSystem.connections.allowDefaultPortFrom(service);
+    // Tasks that start before these exist fail to mount or clone, which counts towards rollback.
+    service.node.addDependency(fileSystem.mountTargetsAvailable);
+    for (const subnet of vpc.privateSubnets) {
+      service.node.addDependency(subnet.internetConnectivityEstablished);
+    }
 
     const albSecurityGroup = new SecurityGroup(this, "AlbSecurityGroup", {
       vpc,
@@ -179,6 +194,7 @@ export class TicketgateStack extends Stack {
       port,
       open: false,
       protocol: props.certificateArn ? ApplicationProtocol.HTTPS : ApplicationProtocol.HTTP,
+      sslPolicy: props.certificateArn ? SslPolicy.RECOMMENDED_TLS : undefined,
       certificates: props.certificateArn
         ? [Certificate.fromCertificateArn(this, "Certificate", props.certificateArn)]
         : undefined,
@@ -187,13 +203,18 @@ export class TicketgateStack extends Stack {
       port: CONTAINER_PORT,
       protocol: ApplicationProtocol.HTTP,
       targets: [service],
-      healthCheck: { path: "/api/health" },
+      healthCheck: { path: "/api/health", interval: Duration.seconds(15), healthyThresholdCount: 2 },
       deregistrationDelay: Duration.seconds(30),
     });
 
     new CfnOutput(this, "Url", {
-      value: `${props.certificateArn ? "https" : "http"}://${alb.loadBalancerDnsName}`,
+      value: props.certificateArn
+        ? `https://${props.domainName}`
+        : `http://${alb.loadBalancerDnsName}`,
     });
+    new CfnOutput(this, "AlbDnsName", { value: alb.loadBalancerDnsName });
+    new CfnOutput(this, "ClusterName", { value: service.cluster.clusterName });
+    new CfnOutput(this, "ServiceName", { value: service.serviceName });
     new CfnOutput(this, "GithubTokenSecret", { value: githubToken.secretName });
     new CfnOutput(this, "ReviewerTokensSecret", { value: reviewerTokens.secretName });
   }

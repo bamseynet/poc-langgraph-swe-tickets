@@ -51,6 +51,14 @@ jobs:
       - name: Build
         run: npm run build
 
+  image:
+    name: Container image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build
+        run: docker build --tag ticketgate:ci .
+
   infra:
     name: Infra (eslint, tsc, vitest, cdk synth)
     runs-on: ubuntu-24.04

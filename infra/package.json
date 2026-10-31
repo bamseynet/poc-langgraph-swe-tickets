@@ -3,9 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "engines": { "node": ">=20.19" },
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
-    "synth": "cdk synth --quiet",
+    "synth": "cdk synth --quiet -c githubRepo=example/example -c targetRepoUrl=https://github.com/example/example.git",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run"
