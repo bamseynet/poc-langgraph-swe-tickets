@@ -266,8 +266,10 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
     return [list_files, read_file, search_code]
 
 
+# Only file headers count. A removed line such as "-- note" appears in a diff as "--- note",
+# so a "---" line is a header only when a "+++" line follows it.
 _DIFF_PATH_LINE = re.compile(
-    r"^(?:--- |\+\+\+ |rename (?:from|to) |copy (?:from|to) |diff --git )(.+)$", re.MULTILINE
+    r"^(?:--- (.+)\n\+\+\+ (.+)|(?:rename|copy) (?:from|to) (.+)|diff --git (.+))$", re.MULTILINE
 )
 
 
@@ -278,7 +280,8 @@ def _diff_touches_hidden_path(diff: str) -> bool:
     file would tell the model, and through it a ticket author, whether a guess was right.
     """
     for match in _DIFF_PATH_LINE.finditer(diff):
-        for raw in match.group(1).replace('"', "").split(" b/"):
+        named = " b/".join(group for group in match.groups() if group)
+        for raw in named.replace('"', "").split(" b/"):
             path = raw.split("\t")[0].strip()
             if path == "/dev/null":
                 continue

@@ -322,3 +322,9 @@ def test_a_patch_against_an_ordinary_file_is_still_checked(repo: Path) -> None:
         " def add(a, b):\n-    return a - b\n+    return a + b\n"
     )
     assert check_patch(repo, diff) is True
+
+
+def test_a_removed_sql_comment_is_not_mistaken_for_a_hidden_file_header(repo: Path) -> None:
+    (repo / "q.sql").write_text("-- secret stuff\nselect 1;\n")
+    diff = "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n--- secret stuff\n+-- notes\n select 1;\n"
+    assert check_patch(repo, diff) is True
