@@ -172,6 +172,8 @@ def _read_text(path: Path) -> str | None:
     # Cap the read, so one huge log or dump in the checkout cannot exhaust memory.
     with path.open("rb") as file:
         data = file.read(MAX_READ_BYTES)
+        if file.read(1):
+            data += b"\n[... file truncated at the read limit ...]"
     if b"\x00" in data[:8192]:
         return None
     return data.decode("utf-8", errors="replace")
@@ -219,6 +221,8 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
             return f"ERROR: {path} is a binary file"
         lines = text.splitlines()
         first = max(start_line, 1)
+        if end_line is not None and end_line < first:
+            return f"ERROR: end_line {end_line} is before start_line {first}"
         if first > len(lines):
             return f"ERROR: {path} has only {len(lines)} line(s)"
         last = len(lines) if end_line is None else min(end_line, len(lines))

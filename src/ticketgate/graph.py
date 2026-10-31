@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -50,11 +51,19 @@ WRITE_NODE = "write_back"
 # a crash, which could lose a human's decision.
 DURABILITY: Literal["sync"] = "sync"
 
-# Bad model output (an empty reply, JSON that does not parse) raises ValueError, which
-# LangGraph's default policy never retries. Retry everything except programming errors.
-DEFAULT_RETRY = RetryPolicy(
-    max_attempts=3, retry_on=lambda exc: not isinstance(exc, TypeError | KeyError)
-)
+
+def _is_transient(exc: Exception) -> bool:
+    """Bad model output (ValueError) and network or server trouble are worth another try.
+
+    LangGraph's default policy never retries ValueError. A 4xx from GitHub or Bedrock will not
+    succeed on a second attempt, so it fails at once instead of after three.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    return not isinstance(exc, TypeError | KeyError | LookupError)
+
+
+DEFAULT_RETRY = RetryPolicy(max_attempts=3, retry_on=_is_transient)
 
 TicketGraph = CompiledStateGraph[TicketState, Any, TicketState, TicketState]
 

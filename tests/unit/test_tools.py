@@ -291,3 +291,14 @@ def test_read_file_reports_a_start_line_past_the_end(repo: Path) -> None:
 def test_a_huge_file_is_read_only_up_to_the_cap(repo: Path) -> None:
     (repo / "huge.log").write_text("needle\n" + "x" * 3_000_000)
     assert "huge.log:1: needle" in _call(repo, "search_code", query="needle")
+
+
+def test_read_file_rejects_an_inverted_range(repo: Path) -> None:
+    output = _call(repo, "read_file", path="src/app.py", start_line=5, end_line=2)
+    assert output.startswith("ERROR")
+
+
+def test_read_file_says_when_a_big_file_was_cut_off(repo: Path) -> None:
+    (repo / "big.txt").write_text("a\n" * 700_000)
+    output = _call(repo, "read_file", path="big.txt", start_line=499_999, end_line=600_000)
+    assert "truncated at the read limit" in output

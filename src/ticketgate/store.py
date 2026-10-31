@@ -89,6 +89,7 @@ class Store:
             )
 
     def list_events(self, thread_id: str | None = None, limit: int = 500) -> list[AuditEvent]:
+        """Return events newest first, which is the order the audit view shows."""
         query = "SELECT id, event_key, at, actor, action, thread_id, detail FROM audit_log"
         params: tuple[Any, ...] = (limit,)
         if thread_id is not None:

@@ -213,3 +213,12 @@ def test_write_back_raises_when_the_comment_is_refused() -> None:
         GitHubIssuesWriter(_client(handler)).write_back(
             REF, comment="c", labels=[], idempotency_key="k"
         )
+
+
+def test_never_follows_a_pagination_link_to_another_port() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        link = '<https://api.github.com:8443/x?page=2>; rel="next"'
+        return httpx.Response(200, json=[], headers={"Link": link})
+
+    with pytest.raises(ValueError, match="Refusing"):
+        GitHubIssuesSource(_client(handler), REPO).list_tickets()

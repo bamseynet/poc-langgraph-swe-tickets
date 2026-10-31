@@ -424,3 +424,21 @@ def test_default_retry_policy_retries_bad_model_output(tmp_path: Path) -> None:
         graph = build_graph(deps, checkpointer)
         result = _start(graph)
     assert result["draft_reply"] == "Set DEFAULT_CURRENCY."
+
+
+def test_retry_policy_skips_permanent_http_errors_and_keeps_transient_ones() -> None:
+    import httpx
+
+    from ticketgate.graph import DEFAULT_RETRY
+
+    def status(code: int) -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://x.test")
+        return httpx.HTTPStatusError("e", request=request, response=httpx.Response(code))
+
+    retry_on: Any = DEFAULT_RETRY.retry_on
+    assert not retry_on(status(422))
+    assert not retry_on(status(401))
+    assert retry_on(status(503))
+    assert retry_on(status(429))
+    assert retry_on(ValueError("empty reply"))
+    assert retry_on(httpx.ConnectError("blip"))

@@ -118,3 +118,9 @@ def test_edit_may_clear_all_labels() -> None:
 def test_edit_cannot_blank_the_comment(comment: str) -> None:
     with pytest.raises(ValidationError, match="edited_comment"):
         ApprovalDecision(action="edit", actor="alice", edited_comment=comment)
+
+
+@pytest.mark.parametrize("labels", [[""], ["  "], ["x" * 51]])
+def test_unusable_edited_labels_are_refused_at_the_gate(labels: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        ApprovalDecision(action="edit", actor="alice", edited_labels=labels)

@@ -39,7 +39,11 @@ def _paginate(
             return
         next_url = httpx.URL(next_link["url"])
         # The client carries the token. Never follow a Link header to another host.
-        if (next_url.scheme, next_url.host) != (client.base_url.scheme, client.base_url.host):
+        if (next_url.scheme, next_url.host, next_url.port) != (
+            client.base_url.scheme,
+            client.base_url.host,
+            client.base_url.port,
+        ):
             raise ValueError(f"Refusing to follow a pagination link to {next_url.host}")
         response = client.get(next_url)
 

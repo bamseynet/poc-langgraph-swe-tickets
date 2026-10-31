@@ -20,6 +20,8 @@ DecisionAction = Literal["approve", "edit", "reject"]
 # GitHub rejects comments over 65,536 characters. Leave room for the idempotency marker.
 MAX_COMMENT_CHARS = 60_000
 MAX_COMPONENT_CHARS = 30
+# GitHub's limit on a label name.
+MAX_LABEL_CHARS = 50
 
 
 class TicketRef(BaseModel):
@@ -128,6 +130,17 @@ class ApprovalDecision(BaseModel):
             raise ValueError("edited_comment must not be blank")
         if value is not None and len(value) > MAX_COMMENT_CHARS:
             raise ValueError(f"edited_comment must be at most {MAX_COMMENT_CHARS} characters")
+        return value
+
+    @field_validator("edited_labels")
+    @classmethod
+    def _labels_usable(cls, value: list[str] | None) -> list[str] | None:
+        # GitHub answers 422 to a blank or over-long label, and by then the decision is saved,
+        # so the ticket would fail on every retry. Refuse it while the reviewer can still fix it.
+        if value is not None and any(
+            not label.strip() or len(label) > MAX_LABEL_CHARS for label in value
+        ):
+            raise ValueError(f"each label must be 1 to {MAX_LABEL_CHARS} characters")
         return value
 
     @model_validator(mode="after")
