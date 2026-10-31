@@ -222,3 +222,13 @@ def test_never_follows_a_pagination_link_to_another_port() -> None:
 
     with pytest.raises(ValueError, match="Refusing"):
         GitHubIssuesSource(_client(handler), REPO).list_tickets()
+
+
+def test_one_malformed_issue_does_not_hide_the_others() -> None:
+    issues = _fixture("issues_page1.json")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"number": 5}, *issues])
+
+    tickets = GitHubIssuesSource(_client(handler), REPO).list_tickets()
+    assert [t.ref.key for t in tickets] == ["101", "102"]
