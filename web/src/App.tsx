@@ -159,6 +159,7 @@ export function App() {
     latestRefresh.current++;
     setTickets([]);
     setAudit([]);
+    setActivity([]);
     setSelectedId(null);
   }
 

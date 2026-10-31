@@ -211,3 +211,10 @@ def test_a_ticket_cannot_guess_its_delimiter() -> None:
     # A random tag closes every spelling trick at once: case, spaces, unicode, no closing bracket.
     first, second = render_ticket(make_ticket()), render_ticket(make_ticket())
     assert first.split(">")[0] != second.split(">")[0]
+
+
+def test_a_submission_that_leaves_out_the_diff_is_still_accepted(tmp_path: Path) -> None:
+    bare = tool_call("submit_investigation", "submit", summary="Found it.", plan=["Fix"])
+    investigation = _run(tmp_path, scripted(bare))
+    assert investigation["complete"] is True
+    assert investigation["diff"] is None

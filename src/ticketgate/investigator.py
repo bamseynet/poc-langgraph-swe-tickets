@@ -35,7 +35,8 @@ class InvestigationSubmission(BaseModel):
     summary: str = Field(description="What is wrong or what is needed, and where.")
     plan: list[str] = Field(description="Ordered steps to make the change.")
     diff: str | None = Field(
-        description="Unified diff relative to the repository root, or null if not feasible."
+        default=None,
+        description="Unified diff relative to the repository root, or null if not feasible.",
     )
 
     @field_validator("diff")

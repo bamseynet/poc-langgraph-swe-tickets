@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sse_starlette.sse import EventSourceResponse
+from starlette.background import BackgroundTask
 
 from ticketgate.bootstrap import App, open_app
 from ticketgate.config import Settings
@@ -273,7 +274,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/events")
     async def events(_reviewer: Reviewer) -> EventSourceResponse:
-        return EventSourceResponse(event_stream(bus, bus.subscribe()))
+        queue = bus.subscribe()
+        # The generator's own cleanup never runs if the client leaves before it starts, so the
+        # response also unsubscribes once it ends. Unsubscribing twice is harmless.
+        return EventSourceResponse(
+            event_stream(bus, queue), background=BackgroundTask(bus.unsubscribe, queue)
+        )
 
     # Mounted last so that it can never shadow an API route.
     if (resolved.web_dist_path / "index.html").exists():
