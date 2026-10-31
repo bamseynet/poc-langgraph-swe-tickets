@@ -169,6 +169,17 @@ def _withheld_note(withheld: int) -> str:
 MAX_READ_BYTES = 1_000_000
 
 
+def _lines(text: str) -> list[str]:
+    """Split on newlines only. str.splitlines() also splits on form feeds and U+2028, which
+    would make the model's line numbers differ from every editor's and from git's."""
+    if not text:
+        return []
+    lines = text.replace("\r\n", "\n").split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def _read_text(path: Path) -> str | None:
     # Cap the read, so one huge log or dump in the checkout cannot exhaust memory.
     with path.open("rb") as file:
@@ -220,7 +231,7 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
             return f"ERROR: could not read {path}: {exc.strerror}"
         if text is None:
             return f"ERROR: {path} is a binary file"
-        lines = text.splitlines()
+        lines = _lines(text)
         first = max(start_line, 1)
         if end_line is not None and end_line < first:
             return f"ERROR: end_line {end_line} is before start_line {first}"
@@ -250,7 +261,7 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
                 continue
             if text is None:
                 continue
-            for number, line in enumerate(text.splitlines(), start=1):
+            for number, line in enumerate(_lines(text), start=1):
                 if needle in line.lower():
                     total += 1
                     if len(matches) < MAX_SEARCH_RESULTS:
@@ -280,8 +291,13 @@ def _diff_touches_hidden_path(diff: str) -> bool:
     file would tell the model, and through it a ticket author, whether a guess was right.
     """
     for match in _DIFF_PATH_LINE.finditer(diff):
-        named = " b/".join(group for group in match.groups() if group)
-        for raw in named.replace('"', "").split(" b/"):
+        raws: list[str] = []
+        for index, group in enumerate(match.groups()):
+            if not group:
+                continue
+            # Only a `diff --git a/x b/y` line holds two paths in one group.
+            raws.extend(group.replace('"', "").split(" b/") if index == 3 else [group])
+        for raw in raws:
             path = raw.split("\t")[0].strip()
             if path == "/dev/null":
                 continue

@@ -116,3 +116,15 @@ def test_adf_keeps_mentions_emoji_and_links() -> None:
     }
     assert "@alice" in adf_to_text(doc)
     assert "https://x.test/1" in adf_to_text(doc)
+
+
+def test_one_malformed_issue_does_not_hide_the_others() -> None:
+    page = _fixture("search_page2.json")
+    page["issues"] = [{"key": "SHOP-99", "fields": {}}, *page["issues"]]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=page)
+
+    keys = [t.ref.key for t in _source(handler).list_tickets()]
+    assert "SHOP-99" not in keys
+    assert keys == ["SHOP-8"]

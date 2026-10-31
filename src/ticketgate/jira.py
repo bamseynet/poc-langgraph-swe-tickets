@@ -9,12 +9,15 @@ Uses `GET /rest/api/3/search/jql`, which replaced the removed `/rest/api/3/searc
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
 import httpx
 
 from ticketgate.models import Ticket, TicketRef
+
+logger = logging.getLogger(__name__)
 
 SOURCE_NAME = "jira"
 PAGE_SIZE = 50
@@ -70,7 +73,12 @@ class JiraSource:
         while True:
             page = self._fetch_page(token)
             for issue in page.get("issues", []):
-                tickets.setdefault(issue["key"], self._to_ticket(issue))
+                try:
+                    if issue["key"] not in tickets:
+                        tickets[issue["key"]] = self._to_ticket(issue)
+                except (KeyError, TypeError, ValueError):
+                    # One malformed issue must not hide every other ticket.
+                    logger.warning("Skipping unreadable Jira issue %s", issue.get("key"))
             token = page.get("nextPageToken")
             # A repeated token means the API is looping, so stop rather than spin forever.
             if page.get("isLast", False) or not token or token in seen_tokens:

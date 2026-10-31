@@ -328,3 +328,15 @@ def test_a_removed_sql_comment_is_not_mistaken_for_a_hidden_file_header(repo: Pa
     (repo / "q.sql").write_text("-- secret stuff\nselect 1;\n")
     diff = "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n--- secret stuff\n+-- notes\n select 1;\n"
     assert check_patch(repo, diff) is True
+
+
+def test_line_numbers_ignore_form_feeds_and_unicode_separators(repo: Path) -> None:
+    separator = chr(0x2028)
+    (repo / "odd.py").write_text(f"a = 1\n# page\x0c break\nb = 2{separator}c = 3\nneedle = 4\n")
+    assert "odd.py:4: needle = 4" in _call(repo, "search_code", query="needle")
+    assert _call(repo, "read_file", path="odd.py", start_line=4, end_line=4) == "4: needle = 4"
+
+
+def test_a_new_file_patch_into_a_noise_directory_is_not_checked(repo: Path) -> None:
+    diff = "--- /dev/null\n+++ b/dist/x.py\n@@ -0,0 +1 @@\n+x = 1\n"
+    assert check_patch(repo, diff) is False
