@@ -165,8 +165,13 @@ def _withheld_note(withheld: int) -> str:
     return f"{withheld} file(s) hidden by policy were not included." if withheld else ""
 
 
+MAX_READ_BYTES = 1_000_000
+
+
 def _read_text(path: Path) -> str | None:
-    data = path.read_bytes()
+    # Cap the read, so one huge log or dump in the checkout cannot exhaust memory.
+    with path.open("rb") as file:
+        data = file.read(MAX_READ_BYTES)
     if b"\x00" in data[:8192]:
         return None
     return data.decode("utf-8", errors="replace")
@@ -214,6 +219,8 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
             return f"ERROR: {path} is a binary file"
         lines = text.splitlines()
         first = max(start_line, 1)
+        if first > len(lines):
+            return f"ERROR: {path} has only {len(lines)} line(s)"
         last = len(lines) if end_line is None else min(end_line, len(lines))
         numbered = "\n".join(f"{n}: {lines[n - 1]}" for n in range(first, last + 1))
         if len(numbered) > MAX_FILE_CHARS:

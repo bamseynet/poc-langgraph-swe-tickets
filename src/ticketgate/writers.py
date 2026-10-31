@@ -54,6 +54,10 @@ class DispatchingWriter:
     def __init__(self, writers: Mapping[str, TicketWriter]) -> None:
         self._writers = writers
 
+    @property
+    def sources(self) -> frozenset[str]:
+        return frozenset(self._writers)
+
     def write_back(
         self, ref: TicketRef, *, comment: str, labels: list[str], idempotency_key: str
     ) -> WriteBackResult:

@@ -77,7 +77,7 @@ def build_sources(settings: Settings) -> list[TicketSource]:
     return sources
 
 
-def build_writer(settings: Settings) -> TicketWriter:
+def build_writer(settings: Settings) -> DispatchingWriter:
     writers: dict[str, TicketWriter] = {
         "demo": LocalFileWriter(settings.data_dir / "write_backs.jsonl")
     }
@@ -86,10 +86,6 @@ def build_writer(settings: Settings) -> TicketWriter:
         if not token:
             raise ConfigError("TICKET_SOURCE=github needs GITHUB_TOKEN to write back")
         writers["github"] = GitHubIssuesWriter(github_client(token))
-    if settings.jira_enabled:
-        # There is no Jira writer. Approved Jira write-backs are only recorded locally, so an
-        # approval completes instead of failing, and nothing is sent to a Jira instance.
-        writers["jira"] = LocalFileWriter(settings.data_dir / "jira_write_backs.jsonl")
     return DispatchingWriter(writers)
 
 
@@ -116,9 +112,10 @@ def open_app(
         store = Store(db_path)
         try:
             with open_checkpointer(db_path) as checkpointer:
+                writer = build_writer(settings)
                 deps = GraphDeps(
                     llms=build_llms(settings),
-                    writer=build_writer(settings),
+                    writer=writer,
                     store=store,
                     target_repo=settings.target_repo_path,
                     max_investigation_steps=settings.max_investigation_steps,
@@ -129,6 +126,7 @@ def open_app(
                     sources=build_sources(settings),
                     on_progress=on_progress,
                     max_new_tickets=settings.max_tickets_per_poll,
+                    writable_sources=writer.sources,
                 )
                 yield App(service=service, store=store, settings=settings)
         finally:

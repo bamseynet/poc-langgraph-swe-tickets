@@ -47,6 +47,10 @@ class NotAwaitingApproval(TicketConflict):
     pass
 
 
+class WriteBackUnsupported(TicketConflict):
+    pass
+
+
 class NotRetryable(TicketConflict):
     pass
 
@@ -123,12 +127,16 @@ class TicketService:
         sources: Sequence[TicketSource],
         on_progress: Callable[[ProgressEvent], None] | None = None,
         max_new_tickets: int = 50,
+        writable_sources: frozenset[str] | None = None,
     ) -> None:
         self._graph = graph
         self._store = store
         self._sources = list(sources)
         self._on_progress = on_progress or (lambda _event: None)
         self._max_new_tickets = max_new_tickets
+        # None means every source can be written to. A ticket from any other source can only
+        # be rejected, so a reviewer is never told "approved" when nothing could be sent.
+        self._writable_sources = writable_sources
         # Failures outside any task, such as a checkpoint write, leave no trace on the thread.
         self._run_errors: dict[str, str] = {}
         self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
@@ -161,14 +169,16 @@ class TicketService:
                 if len(new) >= self._max_new_tickets:
                     break
                 thread_id = ticket.ref.thread_id
+                # Audit first. The event key makes it idempotent, so a crash between the two
+                # steps cannot leave a registered ticket without its ingestion record.
+                self._store.record_event(
+                    event_key=f"{thread_id}:ingested",
+                    thread_id=thread_id,
+                    actor="system",
+                    action="ticket.ingested",
+                    detail={"title": ticket.title, "url": ticket.url},
+                )
                 if self._store.register_ticket(thread_id, ticket.model_dump(mode="json")):
-                    self._store.record_event(
-                        event_key=f"{thread_id}:ingested",
-                        thread_id=thread_id,
-                        actor="system",
-                        action="ticket.ingested",
-                        detail={"title": ticket.title, "url": ticket.url},
-                    )
                     new.append(thread_id)
         return DiscoverResult(new=new, errors=errors)
 
@@ -222,10 +232,18 @@ class TicketService:
         ticket is no longer waiting. It only works within one process, and `open_app` holds a
         file lock to keep a second process off the same data.
         """
-        self._load_ticket(thread_id)
+        ticket = self._load_ticket(thread_id)
         with self._lock(thread_id):
             if not self._graph.get_state(_config(thread_id)).interrupts:
                 raise NotAwaitingApproval(f"{thread_id} is not waiting for approval")
+            if (
+                decision.action != "reject"
+                and self._writable_sources is not None
+                and ticket.ref.source not in self._writable_sources
+            ):
+                raise WriteBackUnsupported(
+                    f"Write-back to {ticket.ref.source} is unsupported, so it can only be rejected"
+                )
             self._run(thread_id, Command(resume=decision.model_dump(mode="json")))
         return self.get(thread_id)
 
@@ -241,7 +259,7 @@ class TicketService:
 
     def _status(self, thread_id: str, snapshot: StateSnapshot) -> TicketStatus:
         status = _status_of(snapshot)
-        if status is TicketStatus.RUNNING and thread_id in self._run_errors:
+        if status in (TicketStatus.QUEUED, TicketStatus.RUNNING) and thread_id in self._run_errors:
             return TicketStatus.FAILED
         return status
 

@@ -47,20 +47,6 @@ def test_jira_switch_adds_the_adapter(tmp_path: Path) -> None:
     assert any(isinstance(s, JiraSource) for s in build_sources(settings))
 
 
-def test_approved_jira_write_backs_are_recorded_locally_not_sent(tmp_path: Path) -> None:
-    from ticketgate.models import TicketRef
-
-    settings = _settings(tmp_path, jira_enabled=True)
-    result = build_writer(settings).write_back(
-        TicketRef(source="jira", project="SHOP", key="SHOP-1"),
-        comment="hi",
-        labels=[],
-        idempotency_key="k",
-    )
-    assert not result.deduplicated
-    assert (tmp_path / "data" / "jira_write_backs.jsonl").exists()
-
-
 def test_enabling_jira_without_its_settings_fails_at_startup(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="JIRA_BASE_URL"):
         build_sources(_settings(tmp_path, jira_enabled=True))

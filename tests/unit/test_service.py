@@ -21,6 +21,7 @@ from ticketgate.service import (
     TicketNotFound,
     TicketService,
     TicketStatus,
+    WriteBackUnsupported,
     _status_of,
 )
 
@@ -46,6 +47,7 @@ class Harness:
         worker: BaseChatModel | None = None,
         principal: Any = None,
         extra_sources: tuple[Any, ...] = (),
+        writable_sources: frozenset[str] | None = None,
     ) -> TicketService:
         self.deps: GraphDeps = make_deps(
             self.tmp_path,
@@ -59,6 +61,7 @@ class Harness:
             store=self.deps.store,
             sources=[*extra_sources, ListSource(*tickets)],
             on_progress=self.events.append,
+            writable_sources=writable_sources,
         )
 
 
@@ -145,6 +148,24 @@ def test_decide_reject_finishes_without_writing(harness: Harness) -> None:
     assert view.decision is not None
     assert view.decision["reason"] == "Not a bug"
     assert harness.writer.calls == []
+
+
+def test_approving_a_ticket_from_a_source_with_no_writer_is_refused_but_reject_works(
+    harness: Harness,
+) -> None:
+    service = harness.service(
+        make_ticket(),
+        worker=scripted(triage("bug")),
+        principal=scripted(submit()),
+        writable_sources=frozenset({"jira"}),
+    )
+    service.ingest()
+    with pytest.raises(WriteBackUnsupported):
+        service.decide(THREAD, _approve())
+    assert service.get(THREAD).status is TicketStatus.AWAITING_APPROVAL
+    assert harness.writer.calls == []
+    reject = ApprovalDecision(action="reject", actor="bob", reason="No Jira writer")
+    assert service.decide(THREAD, reject).status is TicketStatus.REJECTED
 
 
 def test_a_second_decision_is_refused(harness: Harness) -> None:

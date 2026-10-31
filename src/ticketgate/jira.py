@@ -1,8 +1,8 @@
 """Jira Cloud adapter: off by default and never connected to a Jira instance.
 
 It shows that the `TicketSource` interface fits a second system. Enable it with
-`JIRA_ENABLED=true`. There is no Jira writer yet, so approving a Jira ticket fails with a
-clear error and nothing is written.
+`JIRA_ENABLED=true`. There is no Jira writer yet, so a Jira ticket can be triaged and
+investigated but only rejected: approving it is refused before anything is recorded.
 
 Uses `GET /rest/api/3/search/jql`, which replaced the removed `/rest/api/3/search`.
 """
@@ -66,7 +66,7 @@ class JiraSource:
                 tickets.setdefault(issue["key"], self._to_ticket(issue))
             token = page.get("nextPageToken")
             # A repeated token means the API is looping, so stop rather than spin forever.
-            if page.get("isLast", True) or not token or token in seen_tokens:
+            if page.get("isLast", False) or not token or token in seen_tokens:
                 return list(tickets.values())
             seen_tokens.add(token)
 

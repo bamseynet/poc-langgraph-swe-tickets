@@ -281,3 +281,13 @@ def test_check_patch_is_not_fooled_by_git_headers_inside_another_repo(
 
 def test_check_patch_treats_undecodable_text_as_not_applying(repo: Path) -> None:
     assert check_patch(repo, GOOD_PATCH + "+\udc80\n") is False
+
+
+def test_read_file_reports_a_start_line_past_the_end(repo: Path) -> None:
+    output = _call(repo, "read_file", path="src/app.py", start_line=500, end_line=600)
+    assert output.startswith("ERROR")
+
+
+def test_a_huge_file_is_read_only_up_to_the_cap(repo: Path) -> None:
+    (repo / "huge.log").write_text("needle\n" + "x" * 3_000_000)
+    assert "huge.log:1: needle" in _call(repo, "search_code", query="needle")
