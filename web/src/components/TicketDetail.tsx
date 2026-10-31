@@ -29,8 +29,8 @@ function InvestigationSection({ investigation }: { investigation: Investigation 
         <>
           <h4>Plan</h4>
           <ol>
-            {investigation.plan.map((step) => (
-              <li key={step}>{step}</li>
+            {investigation.plan.map((step, index) => (
+              <li key={`${index}:${step}`}>{step}</li>
             ))}
           </ol>
         </>
@@ -171,8 +171,8 @@ export function TicketDetail({ ticket, onDecide, onRetry, canDecide }: Props) {
             {ticket.decision?.edited_comment ?? proposal.comment}
           </pre>
           <ul className="labels" aria-label="Labels">
-            {(ticket.decision?.edited_labels ?? finalLabels).map((label) => (
-              <li key={label} className="tag">
+            {(ticket.decision?.edited_labels ?? finalLabels).map((label, index) => (
+              <li key={`${index}:${label}`} className="tag">
                 {label}
               </li>
             ))}

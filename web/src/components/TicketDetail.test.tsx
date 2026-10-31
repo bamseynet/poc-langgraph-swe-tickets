@@ -168,3 +168,13 @@ test("retry cannot be sent twice while one is in flight", async () => {
   finish();
   await waitFor(() => expect(button).toBeEnabled());
 });
+
+test("renders repeated plan steps without duplicate-key warnings", () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  renderDetail(
+    makeTicket({ investigation: { ...investigation, plan: ["Fix it", "Fix it"] } }),
+  );
+  expect(screen.getAllByText("Fix it")).toHaveLength(2);
+  expect(error).not.toHaveBeenCalled();
+  error.mockRestore();
+});

@@ -75,8 +75,12 @@ class EventBus:
             queue.put_nowait(ProgressEvent(thread_id="", kind="resync"))
 
 
-async def event_stream(bus: EventBus) -> AsyncGenerator[dict[str, str]]:
-    queue = bus.subscribe()
+async def event_stream(
+    bus: EventBus, queue: asyncio.Queue[ProgressEvent] | None = None
+) -> AsyncGenerator[dict[str, str]]:
+    # The endpoint subscribes before the response starts, so an event published between the
+    # client getting its headers and the first read is not lost.
+    queue = queue or bus.subscribe()
     try:
         while True:
             event = await queue.get()
@@ -269,7 +273,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/events")
     async def events(_reviewer: Reviewer) -> EventSourceResponse:
-        return EventSourceResponse(event_stream(bus))
+        return EventSourceResponse(event_stream(bus, bus.subscribe()))
 
     # Mounted last so that it can never shadow an API route.
     if (resolved.web_dist_path / "index.html").exists():

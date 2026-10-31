@@ -155,6 +155,8 @@ export function App() {
     auth.token = "";
     writeStored("ticketgate.token", "");
     setToken("");
+    // A refresh already in flight was made with the old token and must not repopulate the page.
+    latestRefresh.current++;
     setTickets([]);
     setAudit([]);
     setSelectedId(null);

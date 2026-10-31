@@ -364,3 +364,15 @@ def test_shutdown_does_not_work_through_every_unfinished_ticket(
         while not processed and time.monotonic() < deadline:
             time.sleep(0.01)
     assert len(processed) < 5
+
+
+def test_events_published_before_the_first_read_are_not_lost() -> None:
+    async def scenario() -> str:
+        bus = EventBus()
+        queue = bus.subscribe()
+        bus.publish(ProgressEvent("t", "finished"))
+        await asyncio.sleep(0)
+        stream = event_stream(bus, queue)
+        return (await anext(stream))["data"]
+
+    assert '"finished"' in asyncio.run(scenario())
