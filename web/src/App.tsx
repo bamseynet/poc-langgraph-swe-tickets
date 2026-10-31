@@ -10,6 +10,7 @@ import { useEvents } from "./useEvents";
 type Tab = "queue" | "audit";
 
 const MAX_ACTIVITY = 30;
+const SESSION_RETRY_MS = 2_000;
 
 function readStored(key: string): string {
   try {
@@ -21,7 +22,8 @@ function readStored(key: string): string {
 
 function writeStored(key: string, value: string) {
   try {
-    localStorage.setItem(key, value);
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
   } catch {
     // Storage can be blocked. The value then lasts only as long as the page.
   }
@@ -63,19 +65,39 @@ export function App() {
     }
   }, []);
 
+  // Retries until the API answers, because the page can load before it is up.
   useEffect(() => {
-    api
-      .getSession()
-      .then(setSession)
-      .catch((cause: unknown) => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function load() {
+      try {
+        const next = await api.getSession();
+        if (cancelled) return;
+        // A token left over from a deployment with auth would otherwise hide the reviewer's name.
+        if (!next.auth_required && auth.token) {
+          auth.token = "";
+          writeStored("ticketgate.token", "");
+          setToken("");
+        }
+        setSession(next);
+        setLoadError(null);
+      } catch (cause) {
+        if (cancelled) return;
         setLoadError(cause instanceof Error ? cause.message : "Could not reach the API.");
-      });
+        timer = setTimeout(() => void load(), SESSION_RETRY_MS);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
     // The token changes who the server says we are, so read the session again after sign-in.
   }, [token]);
 
   const signedIn = session !== null && (!session.auth_required || Boolean(token));
 
-  // Runs on load and after sign-in. Later updates arrive as events.
+  // Runs on load and whenever the token changes. Later updates arrive as events.
   useEffect(() => {
     if (!signedIn) return;
     let cancelled = false;
@@ -85,13 +107,13 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [signedIn, refresh]);
+  }, [signedIn, token, refresh]);
 
   useEvents(api, signedIn, (event) => {
     const line = describeProgress(event);
     if (line) setActivity((current) => [line, ...current].slice(0, MAX_ACTIVITY));
     if (event.kind !== "node") void refresh();
-  });
+  }, () => void refresh());
 
   async function fetchTickets() {
     setFetching(true);
@@ -117,12 +139,24 @@ export function App() {
   }
 
   async function retry(threadId: string) {
+    let failure: string | null = null;
     try {
       await api.retry(threadId);
     } catch (cause) {
-      setLoadError(cause instanceof Error ? cause.message : "Could not retry.");
+      failure = cause instanceof Error ? cause.message : "Could not retry.";
     }
     await refresh();
+    // After the refresh, which clears errors.
+    if (failure) setLoadError(failure);
+  }
+
+  function signOut() {
+    auth.token = "";
+    writeStored("ticketgate.token", "");
+    setToken("");
+    setTickets([]);
+    setAudit([]);
+    setSelectedId(null);
   }
 
   const detail = useRef<HTMLDivElement>(null);
@@ -174,6 +208,11 @@ export function App() {
                 <button type="submit" disabled={!tokenDraft}>
                   Sign in
                 </button>
+                {token && (
+                  <button type="button" onClick={signOut}>
+                    Sign out
+                  </button>
+                )}
               </div>
             </form>
           ) : (
@@ -241,10 +280,11 @@ export function App() {
           <div className="content" ref={detail}>
             {selected ? (
               <TicketDetail
+                key={selected.thread_id}
                 ticket={selected}
                 canDecide={canDecide}
                 onDecide={(input) => decide(selected.thread_id, input)}
-                onRetry={() => void retry(selected.thread_id)}
+                onRetry={() => retry(selected.thread_id)}
               />
             ) : (
               <p className="empty">Select a ticket to review what the agent proposes.</p>

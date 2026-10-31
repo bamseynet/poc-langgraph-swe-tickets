@@ -160,7 +160,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ):
             app.state.context = context
             app.state.executor = executor
-            _submit(executor, context.service.recover)
+            # One task per ticket, so that shutting down can cancel the ones not yet started.
+            for thread_id in await run_in_threadpool(context.service.unfinished):
+                _submit(executor, context.service.process, thread_id)
             poller = None
             if resolved.poll_interval_seconds > 0:
                 poller = asyncio.create_task(_poll(context, executor))
@@ -169,14 +171,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             finally:
                 if poller:
                     poller.cancel()
-                executor.shutdown(wait=True, cancel_futures=True)
+                await run_in_threadpool(executor.shutdown, wait=True, cancel_futures=True)
 
     async def _poll(context: App, executor: ThreadPoolExecutor) -> None:
         while True:
             await asyncio.sleep(resolved.poll_interval_seconds)
-            await run_in_threadpool(_discover_and_process, context, executor)
+            # Polling is how tickets arrive, so one bad poll must not end it unnoticed.
+            try:
+                await run_in_threadpool(_discover_and_process, context, executor)
+            except Exception:
+                logger.exception("Polling for tickets failed")
 
-    app = FastAPI(title="Ticketgate", lifespan=lifespan)
+    # The interactive docs have no login of their own, so with auth on they are switched off.
+    docs_enabled = tokens is None
+    app = FastAPI(
+        title="Ticketgate",
+        lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
 
     @app.exception_handler(TicketNotFound)
     def _not_found(_request: Request, exc: TicketNotFound) -> JSONResponse:

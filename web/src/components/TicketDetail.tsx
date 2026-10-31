@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { DecisionInput, Investigation, Ticket } from "../types";
 import { DecisionPanel } from "./DecisionPanel";
 import { DiffView } from "./DiffView";
@@ -6,7 +7,7 @@ import { StatusBadge } from "./StatusBadge";
 interface Props {
   ticket: Ticket;
   onDecide: (input: DecisionInput) => Promise<void>;
-  onRetry: () => void;
+  onRetry: () => Promise<void>;
   canDecide: boolean;
 }
 
@@ -81,6 +82,9 @@ function Outcome({ ticket }: { ticket: Ticket }) {
           </time>
           {decision.action === "edit" && ", with edits"}
           {decision.reason && `: ${decision.reason}`}
+          {decision.action !== "reject" &&
+            ticket.status !== "written_back" &&
+            ". It has not been posted yet."}
         </p>
       )}
       {writeBack?.comment_url && isWebUrl(writeBack.comment_url) && (
@@ -98,6 +102,18 @@ export function TicketDetail({ ticket, onDecide, onRetry, canDecide }: Props) {
   const { triage, proposal } = ticket;
   const finalLabels = ticket.write_back?.labels ?? proposal?.labels ?? [];
   const finished = ticket.status === "written_back" || ticket.status === "rejected";
+  const decided = finished || ticket.decision !== null;
+  const rejected = ticket.status === "rejected" || ticket.decision?.action === "reject";
+  const [retrying, setRetrying] = useState(false);
+
+  async function retry() {
+    setRetrying(true);
+    try {
+      await onRetry();
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   return (
     <article className="detail">
@@ -116,7 +132,9 @@ export function TicketDetail({ ticket, onDecide, onRetry, canDecide }: Props) {
           <p className="error" role="alert">
             {ticket.error ?? "This run failed."}
           </p>
-          <button onClick={onRetry}>Retry from the last checkpoint</button>
+          <button disabled={retrying} onClick={() => void retry()}>
+            Retry from the last checkpoint
+          </button>
         </div>
       )}
 
@@ -144,11 +162,11 @@ export function TicketDetail({ ticket, onDecide, onRetry, canDecide }: Props) {
         </section>
       )}
 
-      {finished && <Outcome ticket={ticket} />}
+      {decided && <Outcome ticket={ticket} />}
 
-      {proposal && ticket.status !== "rejected" && (
+      {proposal && !rejected && (
         <section>
-          <h3>{finished ? "What was approved" : "What will be posted"}</h3>
+          <h3>{decided ? "What was approved" : "What will be posted"}</h3>
           <pre className="comment" tabIndex={0}>
             {ticket.decision?.edited_comment ?? proposal.comment}
           </pre>

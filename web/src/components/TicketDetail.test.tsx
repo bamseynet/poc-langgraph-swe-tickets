@@ -1,11 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { investigation, makeTicket } from "../test/fixtures";
 import type { Ticket } from "../types";
 import { TicketDetail } from "./TicketDetail";
 
-function renderDetail(ticket: Ticket, onRetry = vi.fn()) {
+function renderDetail(ticket: Ticket, onRetry = vi.fn(() => Promise.resolve())) {
   render(
     <TicketDetail ticket={ticket} onDecide={vi.fn()} onRetry={onRetry} canDecide />,
   );
@@ -116,4 +116,55 @@ test("a failed ticket shows the error and can be retried", async () => {
 test("only links to http(s) ticket URLs", () => {
   renderDetail(makeTicket({ url: "javascript:alert(1)" }));
   expect(screen.queryByRole("link", { name: /open ticket/i })).toBeNull();
+});
+
+
+const rejection = {
+  decision_id: "d",
+  action: "reject" as const,
+  actor: "bob",
+  reason: "Wrong root cause",
+  edited_comment: null,
+  edited_labels: null,
+  decided_at: "2026-10-31T10:00:00Z",
+};
+
+test("a failed ticket with a saved rejection says so and never reads as if it will post", () => {
+  renderDetail(makeTicket({ status: "failed", error: "boom", decision: rejection }));
+  expect(screen.getByText(/rejected by bob/i)).toBeInTheDocument();
+  expect(screen.queryByText(/what will be posted/i)).toBeNull();
+  expect(screen.queryByText("Proposed comment")).toBeNull();
+});
+
+test("a failed ticket with a saved approval shows who approved and that it has not posted", () => {
+  renderDetail(
+    makeTicket({
+      status: "failed",
+      error: "GitHub is down",
+      decision: { ...rejection, action: "approve", actor: "alice", reason: null },
+    }),
+  );
+  expect(screen.getByText(/approved by alice/i)).toBeInTheDocument();
+  expect(screen.getByText(/not been posted/i)).toBeInTheDocument();
+  expect(screen.getByText(/what was approved/i)).toBeInTheDocument();
+});
+
+test("retry cannot be sent twice while one is in flight", async () => {
+  let finish: () => void = () => undefined;
+  const onRetry = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+  render(
+    <TicketDetail
+      ticket={makeTicket({ status: "failed", error: "boom" })}
+      onDecide={vi.fn()}
+      onRetry={onRetry}
+      canDecide
+    />,
+  );
+  const button = screen.getByRole("button", { name: /retry/i });
+  await userEvent.click(button);
+  expect(button).toBeDisabled();
+  await userEvent.click(button);
+  expect(onRetry).toHaveBeenCalledTimes(1);
+  finish();
+  await waitFor(() => expect(button).toBeEnabled());
 });

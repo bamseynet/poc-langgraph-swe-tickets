@@ -195,11 +195,15 @@ class TicketService:
         Tickets waiting for a human are left alone: only `decide` can move them on. A decision
         already saved stands, so this can post an approval whose first attempt failed.
         """
-        unfinished = {TicketStatus.QUEUED, TicketStatus.RUNNING, TicketStatus.FAILED}
-        recovered = [t.thread_id for t in self.list_tickets() if t.status in unfinished]
+        recovered = self.unfinished()
         for thread_id in recovered:
             self.process(thread_id)
         return recovered
+
+    def unfinished(self) -> list[str]:
+        """Tickets a restart should continue. Waiting for a human doesn't count."""
+        statuses = {TicketStatus.QUEUED, TicketStatus.RUNNING, TicketStatus.FAILED}
+        return [t.thread_id for t in self.list_tickets() if t.status in statuses]
 
     def list_tickets(self, status: TicketStatus | None = None) -> list[TicketView]:
         views = [self.get(thread_id) for thread_id in self._store.list_thread_ids()]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,9 +13,11 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from tests.support import make_ticket
 from ticketgate.api import EventBus, create_app, event_stream
 from ticketgate.config import Settings
-from ticketgate.service import ProgressEvent
+from ticketgate.service import ProgressEvent, TicketService
+from ticketgate.store import Store
 
 BUG = "demo:acme/invoicing#1"
 QUESTION = "demo:acme/invoicing#2"
@@ -306,3 +309,52 @@ def test_event_stream_serialises_events_as_sse_data() -> None:
         "node": None,
         "detail": {"error": "boom"},
     }
+
+
+def test_docs_are_behind_the_login_when_auth_is_on(secured: TestClient) -> None:
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert secured.get(path).status_code == 404
+
+
+def test_a_polling_failure_is_logged_and_polling_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls = 0
+
+    def failing_discover(_self: TicketService) -> Any:
+        nonlocal calls
+        calls += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(TicketService, "discover", failing_discover)
+    settings = _settings(tmp_path).model_copy(update={"poll_interval_seconds": 0.05})
+    with TestClient(create_app(settings)):
+        deadline = time.monotonic() + 10
+        while calls < 3 and time.monotonic() < deadline:
+            time.sleep(0.02)
+    assert calls >= 3
+    assert "database is locked" in caplog.text
+
+
+def test_shutdown_does_not_work_through_every_unfinished_ticket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path, worker_threads=1)
+    settings.data_dir.mkdir(parents=True)
+    store = Store(settings.data_dir / "ticketgate.db")
+    for key in range(5):
+        store.register_ticket(f"t{key}", make_ticket(str(key)).model_dump(mode="json"))
+    store.close()
+
+    processed: list[str] = []
+
+    def slow_process(_self: TicketService, thread_id: str) -> None:
+        processed.append(thread_id)
+        time.sleep(0.2)
+
+    monkeypatch.setattr(TicketService, "process", slow_process)
+    with TestClient(create_app(settings)):
+        deadline = time.monotonic() + 10
+        while not processed and time.monotonic() < deadline:
+            time.sleep(0.01)
+    assert len(processed) < 5

@@ -417,3 +417,10 @@ def test_discover_reports_a_failing_source(harness: Harness) -> None:
     assert result.new == []
     assert "BrokenSource" in result.errors[0]
     assert "source down" in result.errors[0]
+
+
+def test_unfinished_lists_only_tickets_a_restart_should_continue(harness: Harness) -> None:
+    service = _ingested_bug(harness)
+    assert service.unfinished() == []
+    harness.deps.store.register_ticket("queued", make_ticket("9").model_dump(mode="json"))
+    assert service.unfinished() == ["queued"]
