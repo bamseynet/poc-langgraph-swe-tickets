@@ -1,0 +1,21 @@
+{
+  "issues": [
+    {
+      "id": "10002",
+      "key": "SHOP-8",
+      "self": "https://example.atlassian.net/rest/api/3/issue/10002",
+      "fields": {
+        "summary": "Where is the currency configured?",
+        "description": null,
+        "issuetype": {"name": "Task"},
+        "priority": null,
+        "labels": [],
+        "reporter": null,
+        "project": {"key": "SHOP"},
+        "created": "2026-03-03T08:00:00.000+0000",
+        "updated": "2026-03-03T08:00:00.000+0000"
+      }
+    }
+  ],
+  "isLast": true
+}
