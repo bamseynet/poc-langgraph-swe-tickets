@@ -178,6 +178,17 @@ def test_a_failing_tool_call_goes_back_to_the_model_rather_than_wedging(tmp_path
     assert "ERROR" in str(results[0].content)
 
 
+def test_an_unexpected_tool_exception_also_goes_back_to_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(_path: Path) -> str:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr("ticketgate.tools._read_text", explode)
+    llm = scripted(tool_call("read_file", "c1", path="src/app.py"), submit(summary="Recovered."))
+    assert _run(tmp_path, llm)["summary"] == "Recovered."
+
+
 def test_tool_output_is_declared_untrusted_too(tmp_path: Path) -> None:
     llm = scripted(submit())
     _run(tmp_path, llm)
