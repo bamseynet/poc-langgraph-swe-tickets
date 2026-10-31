@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import errno
 import json
+import sqlite3
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -197,3 +200,57 @@ def test_a_torn_last_line_is_not_glued_to_the_next_record(tmp_path: Path) -> Non
     LocalFileWriter(log).write_back(ref, comment="c", labels=[], idempotency_key="b")
     writer = LocalFileWriter(log)
     assert writer.write_back(ref, comment="c", labels=[], idempotency_key="b").deduplicated
+
+
+def _journal_mode(path: Path) -> str:
+    conn = sqlite3.connect(path)
+    try:
+        return str(conn.execute("PRAGMA journal_mode").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def test_uses_wal_by_default(tmp_path: Path) -> None:
+    with open_app(_settings(tmp_path)):
+        assert _journal_mode(tmp_path / "data" / "ticketgate.db") == "wal"
+
+
+def test_can_avoid_wal_on_a_network_file_system(tmp_path: Path) -> None:
+    # SQLite's write-ahead log needs shared memory, which a network file system cannot give it.
+    with open_app(_settings(tmp_path, sqlite_journal_mode="DELETE")) as app:
+        assert _journal_mode(tmp_path / "data" / "ticketgate.db") == "delete"
+        assert app.service.ingest()
+        assert not list((tmp_path / "data").glob("*-wal"))
+    # Reopening must not leave it in WAL either.
+    with open_app(_settings(tmp_path, sqlite_journal_mode="DELETE")):
+        assert _journal_mode(tmp_path / "data" / "ticketgate.db") == "delete"
+
+
+def test_can_wait_for_a_stopped_process_to_release_the_data_lock(tmp_path: Path) -> None:
+    # On a network file system a lock can outlast the task that held it for a while.
+    settings = _settings(tmp_path, data_lock_wait_seconds=10)
+    held = threading.Event()
+
+    def hold_then_release() -> None:
+        with open_app(_settings(tmp_path)):
+            held.set()
+            time.sleep(0.3)
+
+    holder = threading.Thread(target=hold_then_release)
+    holder.start()
+    held.wait(timeout=10)
+    try:
+        with open_app(settings) as app:
+            assert app.service.list_tickets() == []
+    finally:
+        holder.join()
+
+
+def test_gives_up_after_the_wait(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, data_lock_wait_seconds=0.2)
+    with (
+        open_app(_settings(tmp_path)),
+        pytest.raises(ConfigError, match="already"),
+        open_app(settings),
+    ):
+        pass

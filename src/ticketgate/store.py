@@ -51,10 +51,10 @@ class AuditEvent(BaseModel):
 
 
 class Store:
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, journal_mode: str = "WAL") -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(f"PRAGMA journal_mode={journal_mode}")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()

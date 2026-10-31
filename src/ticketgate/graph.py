@@ -85,9 +85,8 @@ class GraphDeps:
 
 
 @contextmanager
-def open_checkpointer(path: Path | str) -> Iterator[SqliteSaver]:
+def open_checkpointer(path: Path | str, *, journal_mode: str = "WAL") -> Iterator[SqliteSaver]:
     conn = sqlite3.connect(path, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     try:
         # State holds JSON and LangChain messages, so nothing else needs deserialising.
@@ -95,6 +94,9 @@ def open_checkpointer(path: Path | str) -> Iterator[SqliteSaver]:
         serde = JsonPlusSerializer(allowed_msgpack_modules=None)
         saver = SqliteSaver(conn, serde=serde)
         saver.setup()
+        # After setup, which always switches the database to WAL. Leaving WAL needs exclusive
+        # access, so this must happen before any other connection opens the file.
+        conn.execute(f"PRAGMA journal_mode={journal_mode}")
         yield saver
     finally:
         conn.close()
