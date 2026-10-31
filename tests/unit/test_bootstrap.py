@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import errno
 import json
+import sqlite3
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -197,3 +200,94 @@ def test_a_torn_last_line_is_not_glued_to_the_next_record(tmp_path: Path) -> Non
     LocalFileWriter(log).write_back(ref, comment="c", labels=[], idempotency_key="b")
     writer = LocalFileWriter(log)
     assert writer.write_back(ref, comment="c", labels=[], idempotency_key="b").deduplicated
+
+
+def _journal_mode(path: Path) -> str:
+    conn = sqlite3.connect(path)
+    try:
+        return str(conn.execute("PRAGMA journal_mode").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def test_uses_wal_by_default(tmp_path: Path) -> None:
+    with open_app(_settings(tmp_path)):
+        assert _journal_mode(tmp_path / "data" / "ticketgate.db") == "wal"
+
+
+def test_can_avoid_wal_on_a_network_file_system(tmp_path: Path) -> None:
+    # SQLite's write-ahead log needs shared memory, which a network file system cannot give it.
+    with open_app(_settings(tmp_path, sqlite_journal_mode="DELETE")) as app:
+        assert _journal_mode(tmp_path / "data" / "ticketgate.db") == "delete"
+        assert app.service.ingest()
+        assert not list((tmp_path / "data").glob("*-wal"))
+    # Reopening must not leave it in WAL either.
+    with open_app(_settings(tmp_path, sqlite_journal_mode="DELETE")):
+        assert _journal_mode(tmp_path / "data" / "ticketgate.db") == "delete"
+
+
+def test_can_wait_for_a_stopped_process_to_release_the_data_lock(tmp_path: Path) -> None:
+    # On a network file system a lock can outlast the task that held it for a while.
+    settings = _settings(tmp_path, data_lock_wait_seconds=10)
+    held = threading.Event()
+
+    def hold_then_release() -> None:
+        with open_app(_settings(tmp_path)):
+            held.set()
+            time.sleep(0.3)
+
+    holder = threading.Thread(target=hold_then_release)
+    holder.start()
+    held.wait(timeout=10)
+    try:
+        with open_app(settings) as app:
+            assert app.service.list_tickets() == []
+    finally:
+        holder.join()
+
+
+def test_gives_up_after_the_wait(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, data_lock_wait_seconds=0.2)
+    with (
+        open_app(_settings(tmp_path)),
+        pytest.raises(ConfigError, match="already"),
+        open_app(settings),
+    ):
+        pass
+
+
+def test_the_placeholder_github_token_is_refused_with_a_clear_error(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        ticket_source="github",
+        github_repo="o/r",
+        github_token=SecretStr("REPLACE_ME_AFTER_DEPLOY"),
+    )
+    with pytest.raises(ConfigError, match="placeholder"):
+        build_sources(settings)
+
+
+def test_a_non_wal_database_is_never_switched_to_wal_while_being_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from ticketgate.graph import open_checkpointer
+
+    real_setup = SqliteSaver.setup
+
+    def forbidden(self: SqliteSaver) -> None:
+        if self.is_setup:
+            return
+        in_memory = self.conn.execute("PRAGMA database_list").fetchone()[2] == ""
+        if not in_memory:
+            raise AssertionError("setup() switches the database to WAL")
+        real_setup(self)
+
+    path = tmp_path / "fresh.db"
+    with monkeypatch.context() as patch:
+        patch.setattr(SqliteSaver, "setup", forbidden)
+        with open_checkpointer(path, journal_mode="DELETE") as saver:
+            assert saver.get_tuple({"configurable": {"thread_id": "x"}}) is None
+    assert _journal_mode(path) == "delete"
+    assert not list(tmp_path.glob("*-wal"))

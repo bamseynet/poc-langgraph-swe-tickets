@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from ticketgate.store import Store
 from ticketgate.writers import DispatchingWriter, LocalFileWriter
 
 JIRA_TIMEOUT_SECONDS = 30.0
+LOCK_RETRY_SECONDS = 0.1
 
 
 class ConfigError(ValueError):
@@ -34,8 +36,15 @@ class App:
     settings: Settings
 
 
+# What the CDK stack puts in the secret until someone sets the real token.
+PLACEHOLDER_TOKEN = "REPLACE_ME_AFTER_DEPLOY"  # noqa: S105
+
+
 def _github_token(settings: Settings) -> str | None:
-    return settings.github_token.get_secret_value() if settings.github_token else None
+    token = settings.github_token.get_secret_value() if settings.github_token else None
+    if token == PLACEHOLDER_TOKEN:
+        raise ConfigError("GITHUB_TOKEN is still the placeholder; set the secret. See the README.")
+    return token
 
 
 def _build_jira_source(settings: Settings) -> JiraSource:
@@ -93,11 +102,17 @@ def build_writer(settings: Settings) -> DispatchingWriter:
 def _exclusive_data_dir(settings: Settings) -> Iterator[None]:
     """Keep a second process off the same data. The kernel releases this even after a crash."""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + settings.data_lock_wait_seconds
     with (settings.data_dir / "ticketgate.lock").open("w") as lock_file:
-        try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise ConfigError(f"Another process is already using {settings.data_dir}") from exc
+        while True:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                if time.monotonic() >= deadline:
+                    message = f"Another process is already using {settings.data_dir}"
+                    raise ConfigError(message) from exc
+                time.sleep(LOCK_RETRY_SECONDS)
         yield
 
 
@@ -109,9 +124,11 @@ def open_app(
         raise ConfigError(f"TARGET_REPO_PATH is not a directory: {settings.target_repo_path}")
     with _exclusive_data_dir(settings):
         db_path = settings.data_dir / "ticketgate.db"
-        store = Store(db_path)
-        try:
-            with open_checkpointer(db_path) as checkpointer:
+        journal_mode = settings.sqlite_journal_mode
+        # The checkpointer opens first: it sets the journal mode, which needs exclusive access.
+        with open_checkpointer(db_path, journal_mode=journal_mode) as checkpointer:
+            store = Store(db_path, journal_mode=journal_mode)
+            try:
                 writer = build_writer(settings)
                 deps = GraphDeps(
                     llms=build_llms(settings),
@@ -129,5 +146,5 @@ def open_app(
                     writable_sources=writer.sources,
                 )
                 yield App(service=service, store=store, settings=settings)
-        finally:
-            store.close()
+            finally:
+                store.close()

@@ -76,9 +76,10 @@ class JiraSource:
                 try:
                     if issue["key"] not in tickets:
                         tickets[issue["key"]] = self._to_ticket(issue)
-                except (KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError, AttributeError):
                     # One malformed issue must not hide every other ticket.
-                    logger.warning("Skipping unreadable Jira issue %s", issue.get("key"))
+                    key = issue.get("key") if isinstance(issue, dict) else None
+                    logger.warning("Skipping unreadable Jira issue %s", key)
             token = page.get("nextPageToken")
             # A repeated token means the API is looping, so stop rather than spin forever.
             if page.get("isLast", False) or not token or token in seen_tokens:

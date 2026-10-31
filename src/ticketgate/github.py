@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
 from ticketgate.models import Ticket, TicketRef, WriteBackResult
+
+logger = logging.getLogger(__name__)
 
 API_URL = "https://api.github.com"
 API_VERSION = "2022-11-28"
@@ -72,7 +75,16 @@ class GitHubIssuesSource:
 
         issues = _paginate(self._client, f"/repos/{self._repo}/issues", params)
         # The issues API also returns pull requests.
-        return [self._to_ticket(issue) for issue in issues if "pull_request" not in issue]
+        tickets: list[Ticket] = []
+        for issue in issues:
+            if "pull_request" in issue:
+                continue
+            try:
+                tickets.append(self._to_ticket(issue))
+            except (KeyError, TypeError, ValueError):
+                # One malformed issue must not hide every other ticket.
+                logger.warning("Skipping unreadable GitHub issue %s", issue.get("number"))
+        return tickets
 
     def _to_ticket(self, issue: dict[str, Any]) -> Ticket:
         return Ticket(

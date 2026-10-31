@@ -16,7 +16,7 @@ from pydantic import SecretStr
 from tests.support import make_ticket
 from ticketgate.api import EventBus, create_app, event_stream
 from ticketgate.config import Settings
-from ticketgate.service import ProgressEvent, TicketService
+from ticketgate.service import DiscoverResult, ProgressEvent, TicketService
 from ticketgate.store import Store
 
 BUG = "demo:acme/invoicing#1"
@@ -378,3 +378,21 @@ def test_events_published_before_the_first_read_are_not_lost() -> None:
         return (await anext(stream))["data"]
 
     assert '"finished"' in asyncio.run(scenario())
+
+
+def test_the_first_poll_runs_at_startup_not_after_a_whole_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    def discover(_self: TicketService) -> Any:
+        calls.append(1)
+        return DiscoverResult(new=[], errors=[])
+
+    monkeypatch.setattr(TicketService, "discover", discover)
+    settings = _settings(tmp_path).model_copy(update={"poll_interval_seconds": 3600})
+    with TestClient(create_app(settings)):
+        deadline = time.monotonic() + 10
+        while not calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+    assert calls

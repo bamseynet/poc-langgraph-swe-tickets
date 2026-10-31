@@ -135,9 +135,11 @@ def _parse_tokens(settings: Settings) -> dict[str, str] | None:
 
 
 def _reviewer_for(tokens: dict[str, str], authorization: str | None) -> str | None:
-    if not authorization or not authorization.startswith("Bearer "):
+    scheme, _, credential = (authorization or "").partition(" ")
+    # RFC 7235: the scheme name is case-insensitive.
+    if scheme.lower() != "bearer" or not credential:
         return None
-    supplied = authorization.removeprefix("Bearer ").encode()
+    supplied = credential.encode()
     reviewer = None
     # Check every token, so the response time does not reveal which one nearly matched.
     for name, token in tokens.items():
@@ -194,12 +196,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def _poll(context: App, executor: ThreadPoolExecutor) -> None:
         while True:
-            await asyncio.sleep(resolved.poll_interval_seconds)
+            # Poll first, so a fresh start does not wait a whole interval for its first tickets.
             # Polling is how tickets arrive, so one bad poll must not end it unnoticed.
             try:
                 await run_in_threadpool(_discover_and_process, context, executor)
             except Exception:
                 logger.exception("Polling for tickets failed")
+            await asyncio.sleep(resolved.poll_interval_seconds)
 
     # The interactive docs have no login of their own, so with auth on they are switched off.
     docs_enabled = tokens is None

@@ -128,3 +128,13 @@ def test_one_malformed_issue_does_not_hide_the_others() -> None:
     keys = [t.ref.key for t in _source(handler).list_tickets()]
     assert "SHOP-99" not in keys
     assert keys == ["SHOP-8"]
+
+
+def test_an_odd_description_node_does_not_abort_the_poll() -> None:
+    page = _fixture("search_page2.json")
+    page["issues"][0]["fields"]["description"] = {"type": "doc", "content": ["oops", None]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=page)
+
+    assert isinstance(_source(handler).list_tickets(), list)

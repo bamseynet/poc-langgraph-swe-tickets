@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     target_repo_path: Path = REPO_ROOT / "examples" / "demo-target"
     max_investigation_steps: int = 12
     data_dir: Path = REPO_ROOT / "data"
+    # WAL is faster, but SQLite cannot use it on a network file system such as EFS.
+    sqlite_journal_mode: Literal["WAL", "DELETE"] = "WAL"
+    # How long to wait for another process to release the data directory.
+    data_lock_wait_seconds: float = 0
 
     # JSON object of reviewer name to token. Unset means local development: there is no
     # login and reviewers type their own name, so "who" in the audit log is self-reported.
