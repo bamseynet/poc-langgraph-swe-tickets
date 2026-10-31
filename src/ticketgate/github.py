@@ -47,12 +47,10 @@ class GitHubIssuesSource:
         repo: str,
         *,
         label_filter: str | None = None,
-        max_tickets: int = 50,
     ) -> None:
         self._client = client
         self._repo = repo
         self._label_filter = label_filter
-        self._max_tickets = max_tickets
 
     def list_tickets(self) -> list[Ticket]:
         params: dict[str, str | int] = {
@@ -64,15 +62,9 @@ class GitHubIssuesSource:
         if self._label_filter:
             params["labels"] = self._label_filter
 
-        tickets: list[Ticket] = []
-        for issue in _paginate(self._client, f"/repos/{self._repo}/issues", params):
-            # The issues API also returns pull requests.
-            if "pull_request" in issue:
-                continue
-            tickets.append(self._to_ticket(issue))
-            if len(tickets) == self._max_tickets:
-                break
-        return tickets
+        issues = _paginate(self._client, f"/repos/{self._repo}/issues", params)
+        # The issues API also returns pull requests.
+        return [self._to_ticket(issue) for issue in issues if "pull_request" not in issue]
 
     def _to_ticket(self, issue: dict[str, Any]) -> Ticket:
         return Ticket(

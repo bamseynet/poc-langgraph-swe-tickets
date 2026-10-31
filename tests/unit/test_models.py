@@ -112,3 +112,9 @@ def test_edited_comment_must_fit_in_a_github_comment() -> None:
 def test_edit_may_clear_all_labels() -> None:
     decision = ApprovalDecision(action="edit", actor="alice", edited_labels=[])
     assert decision.edited_labels == []
+
+
+@pytest.mark.parametrize("comment", ["", "   \n"])
+def test_edit_cannot_blank_the_comment(comment: str) -> None:
+    with pytest.raises(ValidationError, match="edited_comment"):
+        ApprovalDecision(action="edit", actor="alice", edited_comment=comment)

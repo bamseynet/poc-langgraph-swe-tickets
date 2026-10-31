@@ -59,8 +59,14 @@ class ProgressEvent:
     detail: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class DiscoverResult:
+    new: list[str]
+    errors: list[str]
+
+
 class TicketView(BaseModel):
-    """A ticket as a caller sees it. Status comes from the checkpoint, so it cannot drift."""
+    """A ticket as a caller sees it. Status is read from the checkpoint, not stored apart."""
 
     thread_id: str
     title: str
@@ -82,16 +88,18 @@ def _config(thread_id: str) -> RunnableConfig:
 
 
 def _status_of(snapshot: StateSnapshot) -> TicketStatus:
-    if snapshot.interrupts:
-        return TicketStatus.AWAITING_APPROVAL
     if any(task.error for task in snapshot.tasks):
         return TicketStatus.FAILED
-    if not snapshot.values:
-        return TicketStatus.QUEUED
-    if snapshot.next:
-        return TicketStatus.RUNNING
+    if snapshot.interrupts:
+        return TicketStatus.AWAITING_APPROVAL
+    # Only an explicit outcome means finished. An empty `next` does not: LangGraph also reports
+    # that when a crash lands between saving a node's result and checkpointing the step.
     outcome = snapshot.values.get("outcome")
-    return TicketStatus.REJECTED if outcome == "rejected" else TicketStatus.WRITTEN_BACK
+    if outcome == "written_back":
+        return TicketStatus.WRITTEN_BACK
+    if outcome == "rejected":
+        return TicketStatus.REJECTED
+    return TicketStatus.RUNNING if snapshot.values else TicketStatus.QUEUED
 
 
 def _describe_update(update: Any) -> dict[str, Any]:
@@ -114,31 +122,42 @@ class TicketService:
         store: Store,
         sources: Sequence[TicketSource],
         on_progress: Callable[[ProgressEvent], None] | None = None,
+        max_new_tickets: int = 50,
     ) -> None:
         self._graph = graph
         self._store = store
         self._sources = list(sources)
         self._on_progress = on_progress or (lambda _event: None)
+        self._max_new_tickets = max_new_tickets
         self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
         self._locks_guard = threading.Lock()
 
     def ingest(self) -> list[str]:
         """Poll every source once and run each new ticket up to the approval gate."""
-        new = self.discover()
+        new = self.discover().new
         for thread_id in new:
             self.process(thread_id)
         return new
 
-    def discover(self) -> list[str]:
-        """Register tickets not seen before and return their thread ids."""
+    def discover(self) -> DiscoverResult:
+        """Register tickets not seen before, up to the cap, and report unreadable sources.
+
+        The cap limits new work per poll rather than what a source returns. Approved tickets
+        stay open, so capping the source would eventually hide every newer ticket.
+        """
         new: list[str] = []
+        errors: list[str] = []
         for source in self._sources:
             try:
                 tickets = source.list_tickets()
-            except Exception:
-                logger.exception("Could not list tickets from %s", type(source).__name__)
+            except Exception as exc:
+                name = type(source).__name__
+                logger.exception("Could not list tickets from %s", name)
+                errors.append(f"{name}: {exc}")
                 continue
             for ticket in tickets:
+                if len(new) >= self._max_new_tickets:
+                    break
                 thread_id = ticket.ref.thread_id
                 if self._store.register_ticket(thread_id, ticket.model_dump(mode="json")):
                     self._store.record_event(
@@ -149,7 +168,7 @@ class TicketService:
                         detail={"title": ticket.title, "url": ticket.url},
                     )
                     new.append(thread_id)
-        return new
+        return DiscoverResult(new=new, errors=errors)
 
     def process(self, thread_id: str) -> None:
         """Start a registered ticket, or continue it from its last checkpoint."""
@@ -195,8 +214,8 @@ class TicketService:
         """Resume a waiting ticket with a human decision.
 
         The per-ticket lock means that of two simultaneous approvals, the second sees the
-        ticket is no longer waiting. It is an in-process lock, which fits the one process
-        that a SQLite checkpointer supports.
+        ticket is no longer waiting. It only works within one process, and `open_app` holds a
+        file lock to keep a second process off the same data.
         """
         self._load_ticket(thread_id)
         with self._lock(thread_id):
@@ -231,7 +250,8 @@ class TicketService:
         if status is TicketStatus.QUEUED:
             self._run(thread_id, {"ticket": self._load_ticket(thread_id).model_dump(mode="json")})
         elif status in (TicketStatus.RUNNING, TicketStatus.FAILED):
-            # None means "carry on from the checkpoint". It never answers an interrupt.
+            # None carries on from the checkpoint. This branch must stay out of reach for a
+            # ticket waiting for a human, because None would consume a saved resume value.
             self._run(thread_id, None)
 
     def _run(self, thread_id: str, graph_input: Any) -> None:
@@ -245,7 +265,7 @@ class TicketService:
             ):
                 for node, node_update in cast(dict[str, Any], update).items():
                     if not node.startswith("__"):
-                        self._on_progress(
+                        self._emit(
                             ProgressEvent(thread_id, "node", node, _describe_update(node_update))
                         )
         except Exception as exc:
@@ -258,9 +278,16 @@ class TicketService:
                 action="run.failed",
                 detail={"error": str(exc)},
             )
-            self._on_progress(ProgressEvent(thread_id, "failed", detail={"error": str(exc)}))
+            self._emit(ProgressEvent(thread_id, "failed", detail={"error": str(exc)}))
             return
 
         snapshot = self._graph.get_state(_config(thread_id))
         kind: ProgressKind = "awaiting_approval" if snapshot.interrupts else "finished"
-        self._on_progress(ProgressEvent(thread_id, kind))
+        self._emit(ProgressEvent(thread_id, kind))
+
+    def _emit(self, event: ProgressEvent) -> None:
+        # Progress is a courtesy. A broken listener must never stop a ticket mid-run.
+        try:
+            self._on_progress(event)
+        except Exception:
+            logger.exception("Progress listener failed for %s", event.thread_id)

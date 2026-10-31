@@ -135,7 +135,9 @@ def build_investigator(
     builder = StateGraph(InvestigatorState)
     builder.add_node("start", start)
     builder.add_node("agent", agent, retry_policy=retry)
-    builder.add_node("tools", ToolNode(read_tools))
+    # A failing tool call goes back to the model as a message. Raising would stop the ticket,
+    # and every retry would repeat the same call.
+    builder.add_node("tools", ToolNode(read_tools, handle_tool_errors=True))
     builder.add_node("nudge", nudge)
     builder.add_node("finish", finish)
     builder.add_node("give_up", give_up)

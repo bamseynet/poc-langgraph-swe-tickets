@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -54,12 +55,7 @@ def _build_jira_source(settings: Settings) -> JiraSource:
         auth=(settings.jira_email, settings.jira_api_token.get_secret_value()),
         timeout=JIRA_TIMEOUT_SECONDS,
     )
-    return JiraSource(
-        client,
-        base_url=settings.jira_base_url,
-        jql=settings.jira_jql,
-        max_tickets=settings.max_tickets_per_poll,
-    )
+    return JiraSource(client, base_url=settings.jira_base_url, jql=settings.jira_jql)
 
 
 def build_sources(settings: Settings) -> list[TicketSource]:
@@ -74,7 +70,6 @@ def build_sources(settings: Settings) -> list[TicketSource]:
                 github_client(_github_token(settings)),
                 settings.github_repo,
                 label_filter=settings.github_label_filter,
-                max_tickets=settings.max_tickets_per_poll,
             )
         )
     if settings.jira_enabled:
@@ -96,27 +91,42 @@ def build_writer(settings: Settings) -> TicketWriter:
 
 
 @contextmanager
+def _exclusive_data_dir(settings: Settings) -> Iterator[None]:
+    """Keep a second process off the same data. The kernel releases this even after a crash."""
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    with (settings.data_dir / "ticketgate.lock").open("w") as lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise ConfigError(f"Another process is already using {settings.data_dir}") from exc
+        yield
+
+
+@contextmanager
 def open_app(
     settings: Settings, *, on_progress: Callable[[ProgressEvent], None] | None = None
 ) -> Iterator[App]:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    db_path = settings.data_dir / "ticketgate.db"
-    store = Store(db_path)
-    try:
-        with open_checkpointer(db_path) as checkpointer:
-            deps = GraphDeps(
-                llms=build_llms(settings),
-                writer=build_writer(settings),
-                store=store,
-                target_repo=settings.target_repo_path,
-                max_investigation_steps=settings.max_investigation_steps,
-            )
-            service = TicketService(
-                graph=build_graph(deps, checkpointer),
-                store=store,
-                sources=build_sources(settings),
-                on_progress=on_progress,
-            )
-            yield App(service=service, store=store, settings=settings)
-    finally:
-        store.close()
+    if not settings.target_repo_path.is_dir():
+        raise ConfigError(f"TARGET_REPO_PATH is not a directory: {settings.target_repo_path}")
+    with _exclusive_data_dir(settings):
+        db_path = settings.data_dir / "ticketgate.db"
+        store = Store(db_path)
+        try:
+            with open_checkpointer(db_path) as checkpointer:
+                deps = GraphDeps(
+                    llms=build_llms(settings),
+                    writer=build_writer(settings),
+                    store=store,
+                    target_repo=settings.target_repo_path,
+                    max_investigation_steps=settings.max_investigation_steps,
+                )
+                service = TicketService(
+                    graph=build_graph(deps, checkpointer),
+                    store=store,
+                    sources=build_sources(settings),
+                    on_progress=on_progress,
+                    max_new_tickets=settings.max_tickets_per_poll,
+                )
+                yield App(service=service, store=store, settings=settings)
+        finally:
+            store.close()

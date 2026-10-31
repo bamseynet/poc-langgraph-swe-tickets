@@ -20,8 +20,9 @@ flowchart LR
     draft_reply --> prepare_proposal
     investigate --> prepare_proposal
     prepare_proposal --> approval_gate{{"approval_gate<br/>interrupt()"}}
-    approval_gate -->|approve or edit| write_back
-    approval_gate -->|reject| record_rejection
+    approval_gate --> record_decision
+    record_decision -->|approve or edit| write_back
+    record_decision -->|reject| record_rejection
     write_back --> END([end])
     record_rejection --> END
 ```

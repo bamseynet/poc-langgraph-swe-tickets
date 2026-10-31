@@ -1,13 +1,12 @@
 """The ticket workflow, and the human-in-the-loop approval gate at its centre.
 
     triage -> draft_reply | investigate -> prepare_proposal -> approval_gate
-                                                                 |-> write_back
-                                                                 |-> record_rejection
+    approval_gate -> record_decision -> write_back | record_rejection
 
 `approval_gate` calls `interrupt()`, which stops the run and saves it to the checkpointer.
 The thread then waits, for as long as it takes and across restarts, until someone calls
 `graph.invoke(Command(resume=decision), config)`. `write_back` comes after the gate, and it
-is the only node that holds the writer.
+is the only node that uses the writer.
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import RetryPolicy, interrupt
+from pydantic import ValidationError
 
 from ticketgate.investigator import build_investigator
 from ticketgate.llm import Llms
@@ -43,6 +43,7 @@ from ticketgate.state import TicketState
 from ticketgate.store import Store
 
 GATE_NODE = "approval_gate"
+RECORD_NODE = "record_decision"
 WRITE_NODE = "write_back"
 
 # Save each step before starting the next. The default, "async", can lose the latest step in
@@ -125,39 +126,48 @@ class _Nodes:
             draft_reply=state.get("draft_reply"),
             investigation=Investigation.model_validate(raw) if raw else None,
         )
-        return {"proposal": proposal.model_dump(mode="json")}
-
-    def approval_gate(self, state: TicketState) -> TicketState:
-        """Stop until a human decides.
-
-        LangGraph re-runs a node from its first line on resume, and `interrupt()` then returns
-        the resume value. So everything above `interrupt()` runs twice and must be idempotent.
-        """
-        ref = Ticket.model_validate(state["ticket"]).ref
-        thread_id = ref.thread_id
-        store = self._deps.store
-        store.record_event(
+        thread_id = Ticket.model_validate(state["ticket"]).ref.thread_id
+        self._deps.store.record_event(
             event_key=f"{thread_id}:approval.requested",
             thread_id=thread_id,
             actor="system",
             action="approval.requested",
             detail={},
         )
+        return {"proposal": proposal.model_dump(mode="json")}
 
-        resumed = interrupt(
-            {
-                "ticket": state["ticket"],
-                "triage": state["triage"],
-                "draft_reply": state.get("draft_reply"),
-                "investigation": state.get("investigation"),
-                "proposal": state["proposal"],
-            }
-        )
+    def approval_gate(self, state: TicketState) -> TicketState:
+        """Stop until a human decides.
 
-        decision = ApprovalDecision.model_validate(resumed)
+        LangGraph re-runs a node from its first line on resume, and `interrupt()` then returns
+        the resume value. If this node raised after that, LangGraph would keep the resume value
+        and replay it over any later decision, so a rejection could lose to an old approval.
+        So this node does nothing that can fail: side effects belong to `record_decision`, and
+        an invalid value simply asks again.
+        """
+        request = {
+            "ticket": state["ticket"],
+            "triage": state["triage"],
+            "draft_reply": state.get("draft_reply"),
+            "investigation": state.get("investigation"),
+            "proposal": state["proposal"],
+        }
+        while True:
+            resumed = interrupt(request)
+            try:
+                decision = ApprovalDecision.model_validate(resumed)
+            except ValidationError as exc:
+                request = {**request, "invalid_decision": str(exc)}
+            else:
+                return {"decision": decision.model_dump(mode="json")}
+
+    def record_decision(self, state: TicketState) -> TicketState:
+        """Audit the decision. It runs after the gate's checkpoint, so it can safely retry."""
+        thread_id = Ticket.model_validate(state["ticket"]).ref.thread_id
+        decision = ApprovalDecision.model_validate(state["decision"])
         proposal = Proposal.model_validate(state["proposal"])
         final_comment, final_labels = _final_write_back(proposal, decision)
-        store.record_event(
+        self._deps.store.record_event(
             event_key=f"{thread_id}:decision:{decision.decision_id}",
             thread_id=thread_id,
             actor=decision.actor,
@@ -172,7 +182,7 @@ class _Nodes:
                 "final_labels": None if decision.action == "reject" else final_labels,
             },
         )
-        return {"decision": decision.model_dump(mode="json")}
+        return {}
 
     def write_back(self, state: TicketState) -> TicketState:
         ref = Ticket.model_validate(state["ticket"]).ref
@@ -218,6 +228,7 @@ def build_graph(deps: GraphDeps, checkpointer: SqliteSaver) -> TicketGraph:
     builder.add_node("investigate", investigator)
     builder.add_node("prepare_proposal", nodes.prepare_proposal)
     builder.add_node(GATE_NODE, nodes.approval_gate)
+    builder.add_node(RECORD_NODE, nodes.record_decision, retry_policy=deps.retry)
     builder.add_node(WRITE_NODE, nodes.write_back, retry_policy=deps.retry)
     builder.add_node("record_rejection", nodes.record_rejection)
 
@@ -226,7 +237,10 @@ def build_graph(deps: GraphDeps, checkpointer: SqliteSaver) -> TicketGraph:
     builder.add_edge("draft_reply", "prepare_proposal")
     builder.add_edge("investigate", "prepare_proposal")
     builder.add_edge("prepare_proposal", GATE_NODE)
-    builder.add_conditional_edges(GATE_NODE, route_after_decision, [WRITE_NODE, "record_rejection"])
+    builder.add_edge(GATE_NODE, RECORD_NODE)
+    builder.add_conditional_edges(
+        RECORD_NODE, route_after_decision, [WRITE_NODE, "record_rejection"]
+    )
     builder.add_edge(WRITE_NODE, END)
     builder.add_edge("record_rejection", END)
     return builder.compile(checkpointer=checkpointer)

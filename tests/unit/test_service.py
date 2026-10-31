@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ from ticketgate.service import (
     TicketNotFound,
     TicketService,
     TicketStatus,
+    _status_of,
 )
 
 
@@ -246,9 +248,65 @@ def test_recover_leaves_tickets_waiting_for_a_human_alone(harness: Harness) -> N
     assert service.get(THREAD).status is TicketStatus.AWAITING_APPROVAL
 
 
-def test_recover_retries_a_failed_write_back_after_a_restart(harness: Harness) -> None:
+def test_recover_retries_a_failed_write_back(harness: Harness) -> None:
     harness.writer.failures.append(httpx.ConnectError("down"))
     service = _ingested_bug(harness)
     service.decide(THREAD, _approve())
     assert service.recover() == [THREAD]
     assert len(harness.writer.calls) == 1
+
+
+def test_a_raising_progress_listener_cannot_abort_a_run(harness: Harness) -> None:
+    def explode(_event: ProgressEvent) -> None:
+        raise RuntimeError("client went away")
+
+    deps = make_deps(
+        harness.tmp_path,
+        worker=scripted(triage("bug")),
+        principal=scripted(submit()),
+        writer=harness.writer,
+    )
+    service = TicketService(
+        graph=build_graph(deps, harness.checkpointer),
+        store=deps.store,
+        sources=[ListSource(make_ticket())],
+        on_progress=explode,
+    )
+    service.ingest()
+    view = service.decide(THREAD, _approve())
+    assert view.status is TicketStatus.WRITTEN_BACK
+    assert len(harness.writer.calls) == 1
+
+
+def test_status_is_written_back_only_when_the_graph_says_so() -> None:
+    # A finished-looking snapshot without an outcome has not written anything.
+    snapshot = SimpleNamespace(interrupts=(), tasks=(), values={"ticket": {}}, next=())
+    assert _status_of(snapshot) is TicketStatus.RUNNING  # type: ignore[arg-type]
+    done = SimpleNamespace(interrupts=(), tasks=(), values={"outcome": "written_back"}, next=())
+    assert _status_of(done) is TicketStatus.WRITTEN_BACK  # type: ignore[arg-type]
+    rejected = SimpleNamespace(interrupts=(), tasks=(), values={"outcome": "rejected"}, next=())
+    assert _status_of(rejected) is TicketStatus.REJECTED  # type: ignore[arg-type]
+
+
+def test_a_task_error_outranks_a_pending_interrupt() -> None:
+    snapshot = SimpleNamespace(
+        interrupts=("waiting",), tasks=(SimpleNamespace(error="boom"),), values={"t": 1}, next=()
+    )
+    assert _status_of(snapshot) is TicketStatus.FAILED  # type: ignore[arg-type]
+
+
+# --- Finding 8: the cap must limit new work, not hide new tickets.
+
+
+def test_cap_limits_new_tickets_per_poll_and_later_polls_reach_the_rest(harness: Harness) -> None:
+    deps = make_deps(harness.tmp_path, worker=scripted(), principal=scripted())
+    service = TicketService(
+        graph=build_graph(deps, harness.checkpointer),
+        store=deps.store,
+        sources=[ListSource(make_ticket("1"), make_ticket("2"), make_ticket("3"))],
+        max_new_tickets=2,
+    )
+    assert len(service.discover().new) == 2
+    third = service.discover().new
+    assert len(third) == 1
+    assert third[0].endswith("#3")

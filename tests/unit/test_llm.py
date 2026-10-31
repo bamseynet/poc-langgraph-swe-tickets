@@ -7,6 +7,7 @@ from typing import Any
 import boto3
 import pytest
 from botocore.stub import Stubber
+from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
@@ -205,9 +206,10 @@ def test_bedrock_requests_do_not_send_temperature() -> None:
 
 def test_read_timeout_allows_for_first_time_schema_compilation() -> None:
     # AWS docs: compiling a new schema can take ~90s, so use a read timeout of at least 120s.
-    from ticketgate.llm import BEDROCK_READ_TIMEOUT_SECONDS
-
-    assert BEDROCK_READ_TIMEOUT_SECONDS >= 120
+    llms = build_llms(_bedrock_settings())
+    for llm in (llms.principal, llms.worker):
+        assert isinstance(llm, ChatBedrockConverse)
+        assert llm.client.meta.config.read_timeout >= 120
 
 
 def test_default_model_ids_are_the_documented_inference_profiles() -> None:

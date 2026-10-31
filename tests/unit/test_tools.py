@@ -84,7 +84,29 @@ def test_read_file_refuses_a_symlink_that_escapes_the_root(repo: Path) -> None:
     assert "outside add" not in output
 
 
-@pytest.mark.parametrize("path", [".env", ".git/config", "secrets/.env.local", "certs/key.pem"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".env",
+        ".git/config",
+        "secrets/.env.local",
+        "certs/key.pem",
+        "deploy/secrets/prod.yaml",
+        "config/secret/db.ini",
+        ".envrc",
+        "prod.env",
+        ".git-credentials",
+        "aws_credentials",
+        "terraform.tfstate",
+        "prod.tfvars",
+        "service-account.json",
+        ".pgpass",
+        "id_ecdsa",
+        ".dockerconfigjson",
+        "keystore.jks",
+        ".htpasswd",
+    ],
+)
 def test_read_file_refuses_sensitive_paths(repo: Path, path: str) -> None:
     target = repo / path
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +114,30 @@ def test_read_file_refuses_sensitive_paths(repo: Path, path: str) -> None:
     output = _call(repo, "read_file", path=path)
     assert output.startswith("ERROR")
     assert "hunter2" not in output
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["a\x00b", "x" * 5000, "../../" * 400],
+)
+def test_read_file_reports_unusable_paths_instead_of_raising(repo: Path, path: str) -> None:
+    assert _call(repo, "read_file", path=path).startswith("ERROR")
+
+
+def test_read_file_reports_a_symlink_loop_instead_of_raising(repo: Path) -> None:
+    os.symlink(repo / "loop", repo / "loop")
+    assert _call(repo, "read_file", path="loop").startswith("ERROR")
+
+
+def test_search_skips_an_unreadable_file(repo: Path) -> None:
+    os.symlink(repo / "src" / "app.py", repo / "src" / "ok-link.py")
+    locked = repo / "src" / "locked.py"
+    locked.write_text("def add\n")
+    locked.chmod(0)
+    try:
+        assert "src/app.py:1" in _call(repo, "search_code", query="def add")
+    finally:
+        locked.chmod(0o644)
 
 
 def test_read_file_reports_a_missing_file(repo: Path) -> None:
@@ -153,10 +199,27 @@ def test_check_patch_rejects_text_that_is_not_a_patch(repo: Path) -> None:
     assert check_patch(repo, "just change the minus to a plus") is False
 
 
+GIT_STYLE_PATCH = "diff --git a/src/app.py b/src/app.py\n" + GOOD_PATCH
+
+
 def test_check_patch_works_when_the_root_is_inside_another_git_repo(
     repo: Path, tmp_path: Path
 ) -> None:
     # The demo target lives inside this repository, so this is the `make dev` setup.
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     assert check_patch(repo, GOOD_PATCH) is True
+    assert check_patch(repo, GIT_STYLE_PATCH) is True
     assert check_patch(repo, GOOD_PATCH.replace("src/app.py", "src/missing.py")) is False
+
+
+def test_check_patch_is_not_fooled_by_git_headers_inside_another_repo(
+    repo: Path, tmp_path: Path
+) -> None:
+    # With `diff --git` headers, git in a subdirectory of a repo skips the file and exits 0.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    assert check_patch(repo, GIT_STYLE_PATCH.replace("a - b", "a * b")) is False
+    assert check_patch(repo, GIT_STYLE_PATCH.replace("src/app.py", "src/missing.py")) is False
+
+
+def test_check_patch_treats_undecodable_text_as_not_applying(repo: Path) -> None:
+    assert check_patch(repo, GOOD_PATCH + "+\udc80\n") is False

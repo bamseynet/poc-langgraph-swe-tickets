@@ -86,10 +86,6 @@ def test_a_repeating_page_token_cannot_loop_forever() -> None:
     assert len(_source(handler).list_tickets()) == 1
 
 
-def test_stops_at_max_tickets() -> None:
-    assert len(_source(_two_pages, max_tickets=1).list_tickets()) == 1
-
-
 def test_raises_on_an_api_error() -> None:
     with pytest.raises(httpx.HTTPStatusError):
         _source(lambda _: httpx.Response(401, json={})).list_tickets()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -242,12 +243,46 @@ def test_reject_never_calls_the_writer_and_records_the_reason(harness: Harness) 
     assert event.detail["reason"] == "Wrong root cause"
 
 
-def test_invalid_resume_value_does_not_reach_the_writer(harness: Harness) -> None:
+def test_invalid_resume_value_asks_again_and_a_valid_one_then_wins(harness: Harness) -> None:
     graph = _bug_graph(harness)
     _start(graph)
-    with pytest.raises(ValueError, match="actor"):
-        graph.invoke(Command(resume={"action": "approve", "actor": ""}), CONFIG)
+
+    graph.invoke(Command(resume={"action": "approve", "actor": ""}), CONFIG, durability=DURABILITY)
+
     assert harness.writer.calls == []
+    assert graph.get_state(CONFIG).next == (GATE_NODE,)
+    assert "actor" in _interrupt_value(graph)["invalid_decision"]
+
+    result = _resume(graph, ApprovalDecision(action="reject", actor="bob", reason="No"))
+    assert result["outcome"] == "rejected"
+    assert harness.writer.calls == []
+
+
+def test_audit_failure_on_approve_cannot_write_after_a_later_rejection(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = _bug_graph(harness)
+    _start(graph)
+    store = harness.deps.store
+    real_record = store.record_event
+
+    def failing_once(**kwargs: Any) -> None:
+        monkeypatch.setattr(store, "record_event", real_record)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "record_event", failing_once)
+    with pytest.raises(sqlite3.OperationalError):
+        _resume(graph, ApprovalDecision(action="approve", actor="alice"))
+
+    # The approval was saved before the audit failed, so the gate must not reopen.
+    assert graph.get_state(CONFIG).interrupts == ()
+    assert harness.writer.calls == []
+
+    result: dict[str, Any] = graph.invoke(None, CONFIG, durability=DURABILITY)
+    assert result["outcome"] == "written_back"
+    actions = [e.action for e in harness.deps.store.list_events()]
+    assert actions.count("decision.approve") == 1
+    assert actions.index("write_back.completed") < actions.index("decision.approve")
 
 
 def test_audit_trail_records_each_step_with_who_did_it(harness: Harness) -> None:
@@ -348,6 +383,15 @@ def test_diff_too_large_for_a_github_comment_is_truncated_in_the_comment_only(
     assert len(request["proposal"]["comment"]) < 60_000
     assert "truncated" in request["proposal"]["comment"]
     assert request["investigation"]["diff"] == huge
+
+
+def test_long_text_cannot_cut_through_the_closing_fence(harness: Harness) -> None:
+    graph = _bug_graph(harness, summary="s" * 70_000, diff=GOOD_PATCH)
+    _start(graph)
+    comment = _interrupt_value(graph)["proposal"]["comment"]
+    assert len(comment) <= 60_000
+    assert "truncated" in comment
+    assert comment.count("```") == 2
 
 
 def test_a_diff_containing_backticks_cannot_break_out_of_its_fence(harness: Harness) -> None:

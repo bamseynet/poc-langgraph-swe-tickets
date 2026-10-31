@@ -51,13 +51,10 @@ def _parse_jira_time(value: str) -> datetime:
 
 
 class JiraSource:
-    def __init__(
-        self, client: httpx.Client, *, base_url: str, jql: str, max_tickets: int = 50
-    ) -> None:
+    def __init__(self, client: httpx.Client, *, base_url: str, jql: str) -> None:
         self._client = client
         self._base_url = base_url.rstrip("/")
         self._jql = jql
-        self._max_tickets = max_tickets
 
     def list_tickets(self) -> list[Ticket]:
         tickets: dict[str, Ticket] = {}
@@ -67,8 +64,6 @@ class JiraSource:
             page = self._fetch_page(token)
             for issue in page.get("issues", []):
                 tickets.setdefault(issue["key"], self._to_ticket(issue))
-                if len(tickets) == self._max_tickets:
-                    return list(tickets.values())
             token = page.get("nextPageToken")
             # A repeated token means the API is looping, so stop rather than spin forever.
             if page.get("isLast", True) or not token or token in seen_tokens:

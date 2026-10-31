@@ -119,3 +119,24 @@ def test_state_survives_reopening_the_app(tmp_path: Path) -> None:
     with open_app(settings) as app:
         assert app.service.ingest() == []
         assert len(app.service.list_tickets(TicketStatus.AWAITING_APPROVAL)) == 4
+
+
+def test_a_second_process_on_the_same_data_cannot_start(tmp_path: Path) -> None:
+    # The per-ticket lock is in-process, so two processes could both approve a ticket.
+    settings = _settings(tmp_path)
+    with open_app(settings), pytest.raises(ConfigError, match="already"), open_app(settings):
+        pass
+
+
+def test_the_data_lock_is_released_on_exit(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    with open_app(settings):
+        pass
+    with open_app(settings):
+        pass
+
+
+def test_a_missing_target_checkout_fails_at_startup(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, target_repo_path=tmp_path / "missing")
+    with pytest.raises(ConfigError, match="TARGET_REPO_PATH"), open_app(settings):
+        pass

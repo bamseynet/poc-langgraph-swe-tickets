@@ -85,11 +85,6 @@ def test_follows_pagination_links() -> None:
     assert [t.ref.key for t in tickets] == ["101", "102"]
 
 
-def test_stops_at_max_tickets_so_a_busy_repo_cannot_run_up_a_model_bill() -> None:
-    tickets = GitHubIssuesSource(_client(_issues), REPO, max_tickets=1).list_tickets()
-    assert [t.ref.key for t in tickets] == ["101"]
-
-
 def test_null_issue_body_becomes_empty_text() -> None:
     issue = _fixture("issues_page1.json")[0] | {"body": None}
     client = _client(lambda _: httpx.Response(200, json=[issue]))

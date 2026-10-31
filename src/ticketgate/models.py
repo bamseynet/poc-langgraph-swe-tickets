@@ -124,6 +124,8 @@ class ApprovalDecision(BaseModel):
     @field_validator("edited_comment")
     @classmethod
     def _comment_fits(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("edited_comment must not be blank")
         if value is not None and len(value) > MAX_COMMENT_CHARS:
             raise ValueError(f"edited_comment must be at most {MAX_COMMENT_CHARS} characters")
         return value
