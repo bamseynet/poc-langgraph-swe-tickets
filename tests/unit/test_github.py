@@ -85,6 +85,19 @@ def test_follows_pagination_links() -> None:
     assert [t.ref.key for t in tickets] == ["101", "102"]
 
 
+def test_never_follows_a_pagination_link_to_another_host() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        link = '<https://evil.example/steal?page=2>; rel="next"'
+        return httpx.Response(200, json=[], headers={"Link": link})
+
+    with pytest.raises(ValueError, match=r"evil\.example"):
+        GitHubIssuesSource(_client(handler), REPO).list_tickets()
+    assert seen == ["api.github.com"]
+
+
 def test_null_issue_body_becomes_empty_text() -> None:
     issue = _fixture("issues_page1.json")[0] | {"body": None}
     client = _client(lambda _: httpx.Response(200, json=[issue]))

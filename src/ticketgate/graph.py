@@ -50,6 +50,12 @@ WRITE_NODE = "write_back"
 # a crash, which could lose a human's decision.
 DURABILITY: Literal["sync"] = "sync"
 
+# Bad model output (an empty reply, JSON that does not parse) raises ValueError, which
+# LangGraph's default policy never retries. Retry everything except programming errors.
+DEFAULT_RETRY = RetryPolicy(
+    max_attempts=3, retry_on=lambda exc: not isinstance(exc, TypeError | KeyError)
+)
+
 TicketGraph = CompiledStateGraph[TicketState, Any, TicketState, TicketState]
 
 
@@ -60,7 +66,7 @@ class GraphDeps:
     store: Store
     target_repo: Path
     max_investigation_steps: int = 12
-    retry: RetryPolicy = field(default_factory=lambda: RetryPolicy(max_attempts=3))
+    retry: RetryPolicy = field(default_factory=lambda: DEFAULT_RETRY)
 
 
 @contextmanager

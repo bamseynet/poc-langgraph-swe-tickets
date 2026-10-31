@@ -409,3 +409,18 @@ def test_a_diff_containing_backticks_cannot_break_out_of_its_fence(harness: Harn
     _start(graph)
     comment = _interrupt_value(graph)["proposal"]["comment"]
     assert "````diff" in comment
+
+
+def test_default_retry_policy_retries_bad_model_output(tmp_path: Path) -> None:
+    from ticketgate.graph import DEFAULT_RETRY
+
+    deps = make_deps(
+        tmp_path,
+        worker=scripted(triage("question", "low"), "", "Set DEFAULT_CURRENCY."),
+        writer=SpyWriter(),
+        retry=DEFAULT_RETRY._replace(initial_interval=0.01, jitter=False),
+    )
+    with open_checkpointer(tmp_path / "app.db") as checkpointer:
+        graph = build_graph(deps, checkpointer)
+        result = _start(graph)
+    assert result["draft_reply"] == "Set DEFAULT_CURRENCY."

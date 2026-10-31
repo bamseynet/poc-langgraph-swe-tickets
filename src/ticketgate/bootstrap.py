@@ -78,7 +78,6 @@ def build_sources(settings: Settings) -> list[TicketSource]:
 
 
 def build_writer(settings: Settings) -> TicketWriter:
-    # Jira has no writer: approving a Jira ticket raises, and the ticket shows as failed.
     writers: dict[str, TicketWriter] = {
         "demo": LocalFileWriter(settings.data_dir / "write_backs.jsonl")
     }
@@ -87,6 +86,10 @@ def build_writer(settings: Settings) -> TicketWriter:
         if not token:
             raise ConfigError("TICKET_SOURCE=github needs GITHUB_TOKEN to write back")
         writers["github"] = GitHubIssuesWriter(github_client(token))
+    if settings.jira_enabled:
+        # There is no Jira writer. Approved Jira write-backs are only recorded locally, so an
+        # approval completes instead of failing, and nothing is sent to a Jira instance.
+        writers["jira"] = LocalFileWriter(settings.data_dir / "jira_write_backs.jsonl")
     return DispatchingWriter(writers)
 
 

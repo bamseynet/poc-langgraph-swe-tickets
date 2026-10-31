@@ -38,8 +38,14 @@ class LocalFileWriter:
     def _already_written(self, idempotency_key: str) -> bool:
         if not self._path.exists():
             return False
-        lines = self._path.read_text().splitlines()
-        return any(json.loads(line)["idempotency_key"] == idempotency_key for line in lines)
+        for line in self._path.read_text().splitlines():
+            try:
+                if json.loads(line)["idempotency_key"] == idempotency_key:
+                    return True
+            except (ValueError, KeyError, TypeError):
+                # A crash can leave a half-written last line. It must not block every later write.
+                continue
+        return False
 
 
 class DispatchingWriter:
