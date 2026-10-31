@@ -128,6 +128,9 @@ def _parse_tokens(settings: Settings) -> dict[str, str] | None:
     )
     if not valid:
         raise ValueError("REVIEWER_TOKENS must be a non-empty JSON object of name to token")
+    if len(set(tokens.values())) != len(tokens):
+        # Two names on one token would attribute decisions to whichever is listed last.
+        raise ValueError("REVIEWER_TOKENS must give each reviewer a different token")
     return dict(tokens)
 
 
