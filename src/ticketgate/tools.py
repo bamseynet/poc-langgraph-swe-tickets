@@ -11,7 +11,6 @@ from __future__ import annotations
 import fnmatch
 import os
 import subprocess
-from collections.abc import Iterator
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
@@ -21,7 +20,8 @@ MAX_SEARCH_RESULTS = 40
 MAX_LISTED_FILES = 500
 GIT_TIMEOUT_SECONDS = 15
 
-_IGNORED_DIRS = {
+# Generated or vendored, so they add noise and hide nothing a reviewer would miss.
+_NOISE_DIRS = {
     ".git",
     ".hg",
     ".svn",
@@ -29,14 +29,35 @@ _IGNORED_DIRS = {
     "venv",
     "node_modules",
     "__pycache__",
-    "dist",
-    "build",
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
     "cdk.out",
 }
+# Build output at the top level, but ordinary source deeper down, as in Go's cmd/build.
+_ROOT_NOISE_DIRS = {"dist", "build"}
 _SENSITIVE_DIRS = {".aws", ".ssh", ".gnupg", ".kube", ".docker"}
+# Config inside these is probably secret, but source code inside them is just code.
+_SECRET_DIR_NAMES = {"secret", "secrets", "credentials"}
+# Code that handles secrets is what a ticket is often about, and rarely where they are stored.
+_SOURCE_SUFFIXES = {
+    ".c",
+    ".cpp",
+    ".cs",
+    ".go",
+    ".h",
+    ".java",
+    ".js",
+    ".jsx",
+    ".kt",
+    ".md",
+    ".py",
+    ".rb",
+    ".rs",
+    ".rst",
+    ".ts",
+    ".tsx",
+}
 _SENSITIVE_NAMES = (
     ".env",
     ".env.*",
@@ -74,16 +95,27 @@ class _PathRefused(Exception):
     pass
 
 
-def _is_hidden_name(name: str) -> bool:
-    lowered = name.lower()
-    if lowered in _IGNORED_DIRS or lowered in _SENSITIVE_DIRS:
+def _is_noise(parts: tuple[str, ...]) -> bool:
+    return bool(parts) and (
+        parts[0] in _ROOT_NOISE_DIRS or any(part in _NOISE_DIRS for part in parts)
+    )
+
+
+def _is_sensitive(relative: Path) -> bool:
+    parts = [part.lower() for part in relative.parts]
+    if not parts:
+        return False
+    if any(part in _SENSITIVE_DIRS for part in parts):
         return True
-    return any(fnmatch.fnmatch(lowered, pattern) for pattern in _SENSITIVE_NAMES)
+    if Path(parts[-1]).suffix in _SOURCE_SUFFIXES:
+        return False
+    if any(part in _SECRET_DIR_NAMES for part in parts[:-1]):
+        return True
+    return any(fnmatch.fnmatch(parts[-1], pattern) for pattern in _SENSITIVE_NAMES)
 
 
 def _is_hidden_from_agent(relative: Path) -> bool:
-    # Every part counts: deploy/secrets/prod.yaml is as sensitive as a file called secret.
-    return any(_is_hidden_name(part) for part in relative.parts)
+    return _is_noise(relative.parts) or _is_sensitive(relative)
 
 
 def _resolve(root: Path, path: str) -> Path:
@@ -102,14 +134,35 @@ def _resolve(root: Path, path: str) -> Path:
     return resolved
 
 
-def _walk(root: Path, start: Path) -> Iterator[Path]:
+def _walk(root: Path, start: Path) -> tuple[list[Path], int]:
+    """Return the regular files the agent may see, and how many sensitive paths were withheld."""
+    visible: list[Path] = []
+    withheld = 0
     for directory, subdirs, files in os.walk(start):
-        subdirs[:] = sorted(d for d in subdirs if not _is_hidden_name(d))
+        here = Path(directory).relative_to(root)
+        kept = []
+        for name in sorted(subdirs):
+            if _is_noise((here / name).parts):
+                continue
+            if name.lower() in _SENSITIVE_DIRS:
+                withheld += 1
+                continue
+            kept.append(name)
+        subdirs[:] = kept
         for name in sorted(files):
             path = Path(directory) / name
-            if path.is_symlink() or _is_hidden_from_agent(path.relative_to(root)):
-                continue
-            yield path
+            relative = path.relative_to(root)
+            if _is_sensitive(relative):
+                withheld += 1
+            # is_file() also skips FIFOs, which would block a read forever.
+            elif not _is_noise(relative.parts) and not path.is_symlink() and path.is_file():
+                visible.append(path)
+    return visible, withheld
+
+
+def _withheld_note(withheld: int) -> str:
+    # Otherwise "No matches." reads the same as the code not existing.
+    return f"{withheld} file(s) hidden by policy were not included." if withheld else ""
 
 
 def _read_text(path: Path) -> str | None:
@@ -132,12 +185,12 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
             return f"ERROR: {exc}"
         if not start.is_dir():
             return f"ERROR: {path} is not a directory"
-        listed: list[str] = []
-        for file in _walk(root, start):
-            if len(listed) == MAX_LISTED_FILES:
-                listed.append(f"... stopped at {MAX_LISTED_FILES} files, list a subdirectory")
-                break
-            listed.append(str(file.relative_to(root)))
+        files, withheld = _walk(root, start)
+        listed = [str(file.relative_to(root)) for file in files[:MAX_LISTED_FILES]]
+        if len(files) > MAX_LISTED_FILES:
+            listed.append(f"... stopped at {MAX_LISTED_FILES} files, list a subdirectory")
+        if note := _withheld_note(withheld):
+            listed.append(note)
         return "\n".join(listed) or "No files."
 
     @tool
@@ -173,7 +226,9 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
         needle = query.lower()
         matches: list[str] = []
         total = 0
-        for file in _walk(root, root):
+        files, withheld = _walk(root, root)
+        note = _withheld_note(withheld)
+        for file in files:
             try:
                 text = _read_text(file)
             except OSError:
@@ -187,9 +242,11 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
                     if len(matches) < MAX_SEARCH_RESULTS:
                         matches.append(f"{file.relative_to(root)}:{number}: {line.strip()[:200]}")
         if not matches:
-            return "No matches."
+            return f"No matches. {note}".strip()
         if total > len(matches):
             matches.append(f"... {total - len(matches)} more matches, narrow the query")
+        if note:
+            matches.append(note)
         return "\n".join(matches)
 
     return [list_files, read_file, search_code]

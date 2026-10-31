@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -310,3 +311,61 @@ def test_cap_limits_new_tickets_per_poll_and_later_polls_reach_the_rest(harness:
     third = service.discover().new
     assert len(third) == 1
     assert third[0].endswith("#3")
+
+
+def _fail_next_checkpoint(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_put = harness.checkpointer.put
+
+    def failing_put(*args: Any, **kwargs: Any) -> Any:
+        monkeypatch.setattr(harness.checkpointer, "put", real_put)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(harness.checkpointer, "put", failing_put)
+
+
+def test_a_failure_outside_any_task_shows_as_failed_and_can_be_retried(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _ingested_bug(harness)
+    _fail_next_checkpoint(harness, monkeypatch)
+
+    view = service.decide(THREAD, _approve())
+
+    assert view.status is TicketStatus.FAILED
+    assert view.error is not None
+    assert "database is locked" in view.error
+    assert harness.writer.calls == []
+
+    assert service.retry(THREAD).status is TicketStatus.WRITTEN_BACK
+    assert len(harness.writer.calls) == 1
+
+
+def test_retrying_clears_the_recorded_failure(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _ingested_bug(harness)
+    _fail_next_checkpoint(harness, monkeypatch)
+    service.decide(THREAD, _approve())
+    assert service.retry(THREAD).error is None
+
+
+def test_decide_reports_failure_rather_than_raising_when_the_audit_is_down_too(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The decision is saved by then. Raising would tell the reviewer it had not been.
+    service = _ingested_bug(harness)
+    store = harness.deps.store
+    real_record = store.record_event
+
+    def locked(**_kwargs: Any) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "record_event", locked)
+    view = service.decide(THREAD, _approve())
+    monkeypatch.setattr(store, "record_event", real_record)
+
+    assert view.status is TicketStatus.FAILED
+    assert view.decision is not None
+    assert harness.writer.calls == []
+    with pytest.raises(NotAwaitingApproval):
+        service.decide(THREAD, ApprovalDecision(action="reject", actor="bob", reason="No"))

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -139,4 +142,34 @@ def test_the_data_lock_is_released_on_exit(tmp_path: Path) -> None:
 def test_a_missing_target_checkout_fails_at_startup(tmp_path: Path) -> None:
     settings = _settings(tmp_path, target_repo_path=tmp_path / "missing")
     with pytest.raises(ConfigError, match="TARGET_REPO_PATH"), open_app(settings):
+        pass
+
+
+def test_a_locking_error_is_not_reported_as_another_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(_file: Any, _operation: int) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr("ticketgate.bootstrap.fcntl.flock", fail)
+    with pytest.raises(OSError, match="No locks available"), open_app(_settings(tmp_path)):
+        pass
+
+
+def test_a_killed_process_releases_the_data_lock(tmp_path: Path) -> None:
+    code = (
+        "import os, sys; from pathlib import Path\n"
+        "from ticketgate.bootstrap import open_app\n"
+        "from ticketgate.config import Settings\n"
+        "with open_app(Settings(_env_file=None, data_dir=Path(sys.argv[1]))):\n"
+        "    os._exit(45)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path / "data")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 45, result.stderr
+    with open_app(_settings(tmp_path)):
         pass

@@ -394,6 +394,15 @@ def test_long_text_cannot_cut_through_the_closing_fence(harness: Harness) -> Non
     assert comment.count("```") == 2
 
 
+def test_a_long_backtick_run_cannot_push_the_comment_over_the_limit(harness: Harness) -> None:
+    # The fence must outgrow any backtick run, so a hostile diff could otherwise double in size.
+    graph = _bug_graph(harness, diff="+" + "`" * 30_000 + "\n")
+    _start(graph)
+    comment = _interrupt_value(graph)["proposal"]["comment"]
+    assert len(comment) <= 60_000
+    assert "too large" in comment
+
+
 def test_a_diff_containing_backticks_cannot_break_out_of_its_fence(harness: Harness) -> None:
     diff = GOOD_PATCH + "+```\n+@everyone look\n"
     graph = _bug_graph(harness, diff=diff)

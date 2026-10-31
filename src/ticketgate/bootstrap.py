@@ -97,7 +97,7 @@ def _exclusive_data_dir(settings: Settings) -> Iterator[None]:
     with (settings.data_dir / "ticketgate.lock").open("w") as lock_file:
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
+        except BlockingIOError as exc:
             raise ConfigError(f"Another process is already using {settings.data_dir}") from exc
         yield
 

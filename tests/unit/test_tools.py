@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,61 @@ def test_search_skips_an_unreadable_file(repo: Path) -> None:
         locked.chmod(0o644)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/auth/credentials.py",
+        "internal/credentials/store.go",
+        "tests/test_credentials.py",
+        "web/src/credentials-form.tsx",
+        "src/secrets_manager/rotate.py",
+        "app/models/client_secret.py",
+        "docs/secrets.md",
+        "cmd/build/main.go",
+        "lib/dist/stats.py",
+        "Build/Makefile",
+    ],
+)
+def test_ordinary_source_files_are_not_hidden(repo: Path, path: str) -> None:
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("findme = 1\n")
+    assert "findme" in _call(repo, "read_file", path=path)
+    assert path in _call(repo, "search_code", query="findme")
+    assert path in _call(repo, "list_files", path=".")
+
+
+def test_generated_output_at_the_root_is_still_skipped(repo: Path) -> None:
+    (repo / "dist").mkdir()
+    (repo / "dist" / "bundle.js").write_text("findme\n")
+    assert _call(repo, "search_code", query="findme").startswith("No matches.")
+
+
+def test_a_search_says_when_policy_hid_files(repo: Path) -> None:
+    # Otherwise "No matches." looks the same as the code not existing.
+    assert "1 file" in _call(repo, "search_code", query="nothing-matches-this")
+    assert "hidden" in _call(repo, "search_code", query="nothing-matches-this")
+    assert "hidden" in _call(repo, "search_code", query="def add")
+    assert "hidden" in _call(repo, "list_files", path=".")
+
+
+def test_a_search_does_not_mention_hiding_when_nothing_is_hidden(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x\n")
+    assert _call(tmp_path, "search_code", query="zzz") == "No matches."
+
+
+def test_search_skips_a_fifo_instead_of_blocking_on_it(repo: Path) -> None:
+    os.mkfifo(repo / "pipe")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_call, repo, "search_code", query="def add")
+        try:
+            assert "src/app.py" in future.result(timeout=10)
+        finally:
+            # Opening the write end releases a blocked reader, so a regression fails, not hangs.
+            if not future.done():
+                os.close(os.open(repo / "pipe", os.O_WRONLY | os.O_NONBLOCK))
+
+
 def test_read_file_reports_a_missing_file(repo: Path) -> None:
     assert _call(repo, "read_file", path="nope.py").startswith("ERROR")
 
@@ -161,7 +217,9 @@ def test_search_skips_sensitive_ignored_and_binary_files(repo: Path) -> None:
     assert ".git" not in output
     assert "node_modules" not in output
     assert "image.bin" not in output
-    assert _call(repo, "search_code", query="hunter2") == "No matches."
+    hidden = _call(repo, "search_code", query="hunter2")
+    assert hidden.startswith("No matches.")
+    assert "hunter2" not in hidden
 
 
 def test_search_treats_the_query_as_literal_text(repo: Path) -> None:

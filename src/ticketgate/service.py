@@ -129,6 +129,8 @@ class TicketService:
         self._sources = list(sources)
         self._on_progress = on_progress or (lambda _event: None)
         self._max_new_tickets = max_new_tickets
+        # Failures outside any task, such as a checkpoint write, leave no trace on the thread.
+        self._run_errors: dict[str, str] = {}
         self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
         self._locks_guard = threading.Lock()
 
@@ -178,7 +180,8 @@ class TicketService:
     def recover(self) -> list[str]:
         """Finish what a previous process left unfinished. Call this once at startup.
 
-        Tickets waiting for a human are left alone: only `decide` can move them on.
+        Tickets waiting for a human are left alone: only `decide` can move them on. A decision
+        already saved stands, so this can post an approval whose first attempt failed.
         """
         unfinished = {TicketStatus.QUEUED, TicketStatus.RUNNING, TicketStatus.FAILED}
         recovered = [t.thread_id for t in self.list_tickets() if t.status in unfinished]
@@ -195,11 +198,13 @@ class TicketService:
         snapshot = self._graph.get_state(_config(thread_id))
         values = snapshot.values
         errors = [str(task.error) for task in snapshot.tasks if task.error]
+        if thread_id in self._run_errors:
+            errors.append(self._run_errors[thread_id])
         return TicketView(
             thread_id=thread_id,
             title=ticket.title,
             url=ticket.url,
-            status=_status_of(snapshot),
+            status=self._status(thread_id, snapshot),
             request=snapshot.interrupts[0].value if snapshot.interrupts else None,
             triage=values.get("triage"),
             draft_reply=values.get("draft_reply"),
@@ -228,11 +233,17 @@ class TicketService:
         """Continue a failed ticket from its last checkpoint, keeping any human decision."""
         self._load_ticket(thread_id)
         with self._lock(thread_id):
-            status = _status_of(self._graph.get_state(_config(thread_id)))
+            status = self._status(thread_id, self._graph.get_state(_config(thread_id)))
             if status is not TicketStatus.FAILED:
                 raise NotRetryable(f"{thread_id} is {status.value}, not failed")
             self._advance(thread_id)
         return self.get(thread_id)
+
+    def _status(self, thread_id: str, snapshot: StateSnapshot) -> TicketStatus:
+        status = _status_of(snapshot)
+        if status is TicketStatus.RUNNING and thread_id in self._run_errors:
+            return TicketStatus.FAILED
+        return status
 
     def _lock(self, thread_id: str) -> threading.Lock:
         with self._locks_guard:
@@ -255,6 +266,7 @@ class TicketService:
             self._run(thread_id, None)
 
     def _run(self, thread_id: str, graph_input: Any) -> None:
+        self._run_errors.pop(thread_id, None)
         try:
             for _namespace, update in self._graph.stream(
                 graph_input,
@@ -271,6 +283,19 @@ class TicketService:
         except Exception as exc:
             # The failure stays on the thread, so the ticket shows as failed and can be retried.
             logger.exception("Run failed for %s", thread_id)
+            self._run_errors[thread_id] = str(exc)
+            self._audit_failure(thread_id, exc)
+            self._emit(ProgressEvent(thread_id, "failed", detail={"error": str(exc)}))
+            return
+
+        snapshot = self._graph.get_state(_config(thread_id))
+        kind: ProgressKind = "awaiting_approval" if snapshot.interrupts else "finished"
+        self._emit(ProgressEvent(thread_id, kind))
+
+    def _audit_failure(self, thread_id: str, exc: Exception) -> None:
+        # The audit may be what failed. A saved decision still stands, so the caller must get a
+        # failed ticket back, not an exception that reads as "your decision was not taken".
+        try:
             self._store.record_event(
                 event_key=f"{thread_id}:run.failed:{uuid.uuid4().hex}",
                 thread_id=thread_id,
@@ -278,12 +303,8 @@ class TicketService:
                 action="run.failed",
                 detail={"error": str(exc)},
             )
-            self._emit(ProgressEvent(thread_id, "failed", detail={"error": str(exc)}))
-            return
-
-        snapshot = self._graph.get_state(_config(thread_id))
-        kind: ProgressKind = "awaiting_approval" if snapshot.interrupts else "finished"
-        self._emit(ProgressEvent(thread_id, kind))
+        except Exception:
+            logger.exception("Could not audit the failure of %s", thread_id)
 
     def _emit(self, event: ProgressEvent) -> None:
         # Progress is a courtesy. A broken listener must never stop a ticket mid-run.

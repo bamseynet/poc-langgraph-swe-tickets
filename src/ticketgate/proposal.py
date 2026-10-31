@@ -7,6 +7,7 @@ import re
 from ticketgate.models import MAX_COMMENT_CHARS, Investigation, Proposal, TriageResult
 
 MAX_DIFF_CHARS = 40_000
+MAX_PATCH_CHARS = 50_000
 _FOOTER = "_Drafted by an AI agent and reviewed by a human before posting._"
 _TRUNCATED = "\n\n_This text was truncated._"
 
@@ -20,7 +21,10 @@ def _fenced_diff(diff: str) -> str:
     # A diff can contain backticks, so the fence must be longer than any run inside it.
     longest = max((len(run) for run in re.findall(r"`+", shown)), default=0)
     fence = "`" * max(3, longest + 1)
-    return f"{fence}diff\n{shown.rstrip()}\n{fence}{note}"
+    fenced = f"{fence}diff\n{shown.rstrip()}\n{fence}{note}"
+    if len(fenced) > MAX_PATCH_CHARS:
+        return "The patch is too large to show here. The reviewer can see it in full."
+    return fenced
 
 
 def _render_investigation(investigation: Investigation) -> tuple[str, str]:
