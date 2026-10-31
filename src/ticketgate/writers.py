@@ -32,8 +32,17 @@ class LocalFileWriter:
                 "idempotency_key": idempotency_key,
             }
             with self._path.open("a") as file:
+                # A crash can leave a last line without its newline. Appending straight on would
+                # glue this record to it, hiding it from `_already_written`.
+                if self._path.stat().st_size and not self._ends_with_newline():
+                    file.write("\n")
                 file.write(json.dumps(record) + "\n")
         return WriteBackResult(labels=labels)
+
+    def _ends_with_newline(self) -> bool:
+        with self._path.open("rb") as file:
+            file.seek(-1, 2)
+            return file.read(1) == b"\n"
 
     def _already_written(self, idempotency_key: str) -> bool:
         if not self._path.exists():

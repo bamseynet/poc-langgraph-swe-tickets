@@ -302,3 +302,8 @@ def test_read_file_says_when_a_big_file_was_cut_off(repo: Path) -> None:
     (repo / "big.txt").write_text("a\n" * 700_000)
     output = _call(repo, "read_file", path="big.txt", start_line=499_999, end_line=600_000)
     assert "truncated at the read limit" in output
+
+
+def test_reading_an_empty_file_says_so(repo: Path) -> None:
+    (repo / "empty.py").write_text("")
+    assert _call(repo, "read_file", path="empty.py") == "empty.py is empty"

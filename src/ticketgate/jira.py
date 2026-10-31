@@ -37,6 +37,13 @@ def _render_adf(node: dict[str, Any]) -> str:
         return str(node.get("text", ""))
     if kind == "hardBreak":
         return "\n"
+    attrs = node.get("attrs") or {}
+    if kind == "mention":
+        return str(attrs.get("text", ""))
+    if kind == "emoji":
+        return str(attrs.get("text") or attrs.get("shortName", ""))
+    if kind == "inlineCard":
+        return str(attrs.get("url", ""))
     inner = "".join(_render_adf(child) for child in node.get("content", []))
     if kind == "listItem":
         return f"- {inner.strip()}\n"

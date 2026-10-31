@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+from botocore.exceptions import ClientError
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -60,6 +61,11 @@ def _is_transient(exc: Exception) -> bool:
     """
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code == 429 or exc.response.status_code >= 500
+    if isinstance(exc, ClientError):
+        # botocore reports Bedrock failures this way. Throttling and 5xx may pass; the rest,
+        # such as access denied or a bad request, will not.
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
+        return status == 429 or status >= 500
     return not isinstance(exc, TypeError | KeyError | LookupError)
 
 

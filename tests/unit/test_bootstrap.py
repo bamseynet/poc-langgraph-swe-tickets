@@ -185,3 +185,15 @@ def test_a_torn_write_back_log_line_does_not_block_later_writes(tmp_path: Path) 
     ref = TicketRef(source="demo", project="p", key="1")
     assert writer.write_back(ref, comment="c", labels=[], idempotency_key="b").deduplicated is False
     assert writer.write_back(ref, comment="c", labels=[], idempotency_key="a").deduplicated is True
+
+
+def test_a_torn_last_line_is_not_glued_to_the_next_record(tmp_path: Path) -> None:
+    from ticketgate.models import TicketRef
+    from ticketgate.writers import LocalFileWriter
+
+    log = tmp_path / "wb.jsonl"
+    log.write_text('{"idempotency_key": "a"}\n{"idempotency_ke')
+    ref = TicketRef(source="demo", project="p", key="1")
+    LocalFileWriter(log).write_back(ref, comment="c", labels=[], idempotency_key="b")
+    writer = LocalFileWriter(log)
+    assert writer.write_back(ref, comment="c", labels=[], idempotency_key="b").deduplicated

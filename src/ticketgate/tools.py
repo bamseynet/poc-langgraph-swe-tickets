@@ -223,6 +223,8 @@ def make_read_only_tools(root: Path) -> list[BaseTool]:
         first = max(start_line, 1)
         if end_line is not None and end_line < first:
             return f"ERROR: end_line {end_line} is before start_line {first}"
+        if not lines:
+            return f"{path} is empty"
         if first > len(lines):
             return f"ERROR: {path} has only {len(lines)} line(s)"
         last = len(lines) if end_line is None else min(end_line, len(lines))

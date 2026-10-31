@@ -97,3 +97,22 @@ def test_adf_tolerates_unknown_nodes_and_plain_text() -> None:
     unknown_node = {"type": "mystery", "content": [{"type": "text", "text": "x"}]}
     doc = {"type": "doc", "content": [unknown_node]}
     assert adf_to_text(doc) == "x"
+
+
+def test_adf_keeps_mentions_emoji_and_links() -> None:
+    doc = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "ping "},
+                    {"type": "mention", "attrs": {"text": "@alice"}},
+                    {"type": "text", "text": " "},
+                    {"type": "inlineCard", "attrs": {"url": "https://x.test/1"}},
+                ],
+            }
+        ],
+    }
+    assert "@alice" in adf_to_text(doc)
+    assert "https://x.test/1" in adf_to_text(doc)

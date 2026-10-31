@@ -390,3 +390,18 @@ def test_decide_reports_failure_rather_than_raising_when_the_audit_is_down_too(
     assert harness.writer.calls == []
     with pytest.raises(NotAwaitingApproval):
         service.decide(THREAD, ApprovalDecision(action="reject", actor="bob", reason="No"))
+
+
+def test_once_the_cap_is_reached_later_sources_are_not_listed(harness: Harness) -> None:
+    class Exploding:
+        def list_tickets(self) -> list[Ticket]:
+            raise AssertionError("listed a source after the cap was reached")
+
+    deps = make_deps(harness.tmp_path, worker=scripted(), principal=scripted())
+    service = TicketService(
+        graph=build_graph(deps, harness.checkpointer),
+        store=deps.store,
+        sources=[ListSource(make_ticket("1")), Exploding()],
+        max_new_tickets=1,
+    )
+    assert service.discover().errors == []

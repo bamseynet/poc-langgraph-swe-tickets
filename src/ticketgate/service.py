@@ -158,6 +158,8 @@ class TicketService:
         new: list[str] = []
         errors: list[str] = []
         for source in self._sources:
+            if len(new) >= self._max_new_tickets:
+                break
             try:
                 tickets = source.list_tickets()
             except Exception as exc:

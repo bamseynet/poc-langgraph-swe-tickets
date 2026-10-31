@@ -442,3 +442,18 @@ def test_retry_policy_skips_permanent_http_errors_and_keeps_transient_ones() -> 
     assert retry_on(status(429))
     assert retry_on(ValueError("empty reply"))
     assert retry_on(httpx.ConnectError("blip"))
+
+
+def test_retry_policy_skips_permanent_bedrock_errors() -> None:
+    from botocore.exceptions import ClientError
+
+    from ticketgate.graph import DEFAULT_RETRY
+
+    def error(code: int) -> ClientError:
+        response: Any = {"ResponseMetadata": {"HTTPStatusCode": code}, "Error": {"Code": "X"}}
+        return ClientError(response, "InvokeModel")
+
+    retry_on: Any = DEFAULT_RETRY.retry_on
+    assert not retry_on(error(403))
+    assert retry_on(error(429))
+    assert retry_on(error(503))
